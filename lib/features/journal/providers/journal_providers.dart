@@ -71,6 +71,7 @@ class JournalNotifier extends StateNotifier<AsyncValue<JournalDay>> {
   final JournalService _journalService;
   final Ref _ref;
   DateTime _currentDate;
+  // ignore: unused_field
   String? _journalFilePath;
 
   JournalNotifier(this._journalService, this._ref, this._currentDate)
