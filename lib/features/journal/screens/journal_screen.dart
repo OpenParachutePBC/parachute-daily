@@ -844,13 +844,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
     );
   }
 
-  void _handleEntryTap(JournalEntry entry) async {
-    // Don't edit preamble/imported markdown
-    if (entry.id == 'preamble' || entry.id.startsWith('plain_')) {
-      _showEntryDetail(context, entry);
-      return;
-    }
-
+  void _handleEntryTap(JournalEntry entry) {
     // If already editing this entry, do nothing (let TextField handle taps)
     if (_editingEntryId == entry.id) {
       return;
@@ -859,6 +853,22 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
     // If editing another entry, save it first
     if (_editingEntryId != null) {
       _saveCurrentEdit();
+    }
+
+    // Show entry detail view on tap
+    _showEntryDetail(context, entry);
+  }
+
+  /// Start editing an entry - called from action menu or long press
+  Future<void> _startEditing(JournalEntry entry) async {
+    // Don't edit preamble/imported markdown
+    if (entry.id == 'preamble' || entry.id.startsWith('plain_')) {
+      return;
+    }
+
+    // If editing another entry, save it first
+    if (_editingEntryId != null) {
+      await _saveCurrentEdit();
     }
 
     // Check for existing draft
@@ -1213,7 +1223,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
               title: const Text('Edit'),
               onTap: () {
                 Navigator.pop(context);
-                setState(() => _editingEntryId = entry.id);
+                _startEditing(entry);
               },
             ),
             // Re-transcribe option for voice entries with audio
@@ -1336,12 +1346,13 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
   void _showEntryDetail(BuildContext context, JournalEntry entry) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final canEdit = entry.id != 'preamble' && !entry.id.startsWith('plain_');
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => DraggableScrollableSheet(
+      builder: (sheetContext) => DraggableScrollableSheet(
         initialChildSize: 0.7,
         minChildSize: 0.5,
         maxChildSize: 0.95,
@@ -1403,10 +1414,20 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
                         ],
                       ),
                     ),
+                    // Edit button
+                    if (canEdit)
+                      IconButton(
+                        icon: Icon(Icons.edit_outlined, color: BrandColors.forest),
+                        tooltip: 'Edit',
+                        onPressed: () {
+                          Navigator.pop(sheetContext);
+                          _startEditing(entry);
+                        },
+                      ),
                     IconButton(
                       icon: const Icon(Icons.close),
                       color: BrandColors.driftwood,
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: () => Navigator.pop(sheetContext),
                     ),
                   ],
                 ),
@@ -1426,17 +1447,22 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (entry.content.isNotEmpty)
+                      // Image for photo/handwriting entries
+                      if (entry.hasImage)
+                        _buildDetailImage(context, entry, isDark),
+
+                      if (entry.content.isNotEmpty) ...[
+                        if (entry.hasImage) const SizedBox(height: 16),
                         SelectableText(
                           entry.content,
                           style: theme.textTheme.bodyLarge?.copyWith(
                             color: isDark ? BrandColors.stone : BrandColors.charcoal,
                             height: 1.6,
                           ),
-                        )
-                      else if (entry.isLinked && entry.linkedFilePath != null)
+                        ),
+                      ] else if (entry.isLinked && entry.linkedFilePath != null)
                         _buildLinkedFileInfo(context, entry.linkedFilePath!)
-                      else
+                      else if (!entry.hasImage)
                         Text(
                           'No content',
                           style: theme.textTheme.bodyMedium?.copyWith(
@@ -1453,6 +1479,157 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
         ),
       ),
     );
+  }
+
+  /// Build image display for detail view
+  Widget _buildDetailImage(BuildContext context, JournalEntry entry, bool isDark) {
+    if (entry.imagePath == null) return const SizedBox.shrink();
+
+    final isHandwriting = entry.type == JournalEntryType.handwriting;
+
+    return FutureBuilder<String>(
+      future: _getFullImagePath(entry.imagePath!),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return Container(
+            height: 200,
+            decoration: BoxDecoration(
+              color: isDark ? BrandColors.charcoal : BrandColors.stone,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Center(
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+
+        final file = File(snapshot.data!);
+        if (!file.existsSync()) {
+          return Container(
+            height: 100,
+            decoration: BoxDecoration(
+              color: isDark ? BrandColors.charcoal : BrandColors.stone,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.image_not_supported_outlined, color: BrandColors.driftwood),
+                  const SizedBox(height: 8),
+                  Text('Image not found', style: TextStyle(color: BrandColors.driftwood)),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return GestureDetector(
+          onTap: () => _showFullScreenImageFromPath(context, snapshot.data!, isHandwriting, isDark),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isHandwriting
+                  ? (isDark ? BrandColors.nightSurfaceElevated : Colors.white)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isDark
+                    ? BrandColors.charcoal.withValues(alpha: 0.5)
+                    : BrandColors.stone.withValues(alpha: 0.5),
+                width: 1,
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(11),
+              child: Image.file(
+                file,
+                width: double.infinity,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return SizedBox(
+                    height: 100,
+                    child: Center(
+                      child: Icon(Icons.broken_image_outlined, color: BrandColors.driftwood),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Show full screen image viewer from path
+  void _showFullScreenImageFromPath(BuildContext context, String path, bool isHandwriting, bool isDark) {
+    final file = File(path);
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (context) => GestureDetector(
+        onTap: () => Navigator.pop(context),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(16),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width - 32,
+                  maxHeight: MediaQuery.of(context).size.height - 100,
+                ),
+                decoration: BoxDecoration(
+                  color: isHandwriting
+                      ? (isDark ? BrandColors.nightSurfaceElevated : Colors.white)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 4.0,
+                    child: Image.file(
+                      file,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Get full path for an image
+  Future<String> _getFullImagePath(String relativePath) async {
+    final fileSystem = FileSystemService();
+    final vaultPath = await fileSystem.getRootPath();
+    return '$vaultPath/$relativePath';
   }
 
   Widget _buildAudioPlayer(BuildContext context, JournalEntry entry, bool isDark) {

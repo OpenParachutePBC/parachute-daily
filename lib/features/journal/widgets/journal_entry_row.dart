@@ -686,23 +686,73 @@ class _JournalEntryRowState extends ConsumerState<JournalEntryRow> {
 
         final file = File(snapshot.data!);
 
+        if (!file.existsSync()) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Container(
+              height: 80,
+              decoration: BoxDecoration(
+                color: isDark ? BrandColors.charcoal : BrandColors.stone,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.image_not_supported_outlined,
+                      color: BrandColors.driftwood,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Image not found',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: BrandColors.driftwood,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        // Use different display for handwriting vs photos
+        final isHandwriting = widget.entry.type == JournalEntryType.handwriting;
+
         return Padding(
           padding: const EdgeInsets.only(top: 12),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: file.existsSync()
-                ? Image.file(
+          child: GestureDetector(
+            onTap: () => _showFullScreenImage(context, file, isDark),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isHandwriting
+                    ? (isDark ? BrandColors.nightSurfaceElevated : Colors.white)
+                    : (isDark ? BrandColors.charcoal : BrandColors.stone),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isDark
+                      ? BrandColors.charcoal.withValues(alpha: 0.5)
+                      : BrandColors.stone.withValues(alpha: 0.5),
+                  width: 1,
+                ),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(11),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: isHandwriting ? 300 : 200,
+                    minHeight: 80,
+                  ),
+                  child: Image.file(
                     file,
-                    height: 160,
                     width: double.infinity,
-                    fit: BoxFit.cover,
+                    fit: isHandwriting ? BoxFit.contain : BoxFit.cover,
                     errorBuilder: (context, error, stackTrace) {
-                      return Container(
+                      return SizedBox(
                         height: 80,
-                        decoration: BoxDecoration(
-                          color: isDark ? BrandColors.charcoal : BrandColors.stone,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
                         child: Center(
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
@@ -725,37 +775,78 @@ class _JournalEntryRowState extends ConsumerState<JournalEntryRow> {
                         ),
                       );
                     },
-                  )
-                : Container(
-                    height: 80,
-                    decoration: BoxDecoration(
-                      color: isDark ? BrandColors.charcoal : BrandColors.stone,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.image_not_supported_outlined,
-                            color: BrandColors.driftwood,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Image not found',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: BrandColors.driftwood,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ),
+                ),
+              ),
+            ),
           ),
         );
       },
+    );
+  }
+
+  void _showFullScreenImage(BuildContext context, File file, bool isDark) {
+    final isHandwriting = widget.entry.type == JournalEntryType.handwriting;
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (context) => GestureDetector(
+        onTap: () => Navigator.pop(context),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(16),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Image
+              Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width - 32,
+                  maxHeight: MediaQuery.of(context).size.height - 100,
+                ),
+                decoration: BoxDecoration(
+                  color: isHandwriting
+                      ? (isDark ? BrandColors.nightSurfaceElevated : Colors.white)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 4.0,
+                    child: Image.file(
+                      file,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+              // Close button
+              Positioned(
+                top: 0,
+                right: 0,
+                child: IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
