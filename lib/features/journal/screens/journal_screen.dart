@@ -666,14 +666,15 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
               onTap: () => _showDatePicker(context),
               child: Column(
                 children: [
-                  if (isToday)
-                    Text(
-                      'Today',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: BrandColors.forest,
-                        fontWeight: FontWeight.w600,
-                      ),
+                  Text(
+                    'Parachute Daily',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: isDark ? BrandColors.driftwood : BrandColors.charcoal,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
                     ),
+                  ),
+                  const SizedBox(height: 2),
                   Text(
                     displayDate,
                     style: theme.textTheme.titleMedium?.copyWith(

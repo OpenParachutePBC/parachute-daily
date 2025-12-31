@@ -1,8 +1,10 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/services/file_system_service.dart';
+import '../../../core/theme/design_tokens.dart';
 
 /// Result of a photo capture operation.
 class CaptureResult {
@@ -83,6 +85,101 @@ class PhotoCaptureService {
       debugPrint('[PhotoCaptureService] Error selecting from gallery: $e');
       rethrow;
     }
+  }
+
+  /// Select a photo from gallery and allow cropping before saving.
+  ///
+  /// Returns [CaptureResult] with paths to the saved image,
+  /// or null if the user cancelled at any step.
+  Future<CaptureResult?> selectFromGalleryWithCrop() async {
+    try {
+      final XFile? photo = await _picker.pickImage(
+        source: ImageSource.gallery,
+        // Don't limit size here - let the cropper handle it
+        imageQuality: 100,
+      );
+
+      if (photo == null) {
+        debugPrint('[PhotoCaptureService] Gallery selection cancelled');
+        return null;
+      }
+
+      // Show cropper
+      final croppedFile = await _cropImage(photo.path);
+      if (croppedFile == null) {
+        debugPrint('[PhotoCaptureService] Cropping cancelled');
+        return null;
+      }
+
+      return _savePhoto(XFile(croppedFile.path), 'photo');
+    } catch (e) {
+      debugPrint('[PhotoCaptureService] Error selecting from gallery with crop: $e');
+      rethrow;
+    }
+  }
+
+  /// Capture from camera and allow cropping before saving.
+  ///
+  /// Returns [CaptureResult] with paths to the saved image,
+  /// or null if the user cancelled at any step.
+  Future<CaptureResult?> captureFromCameraWithCrop() async {
+    try {
+      final XFile? photo = await _picker.pickImage(
+        source: ImageSource.camera,
+        // Don't limit size here - let the cropper handle it
+        imageQuality: 100,
+        preferredCameraDevice: CameraDevice.rear,
+      );
+
+      if (photo == null) {
+        debugPrint('[PhotoCaptureService] Camera capture cancelled');
+        return null;
+      }
+
+      // Show cropper
+      final croppedFile = await _cropImage(photo.path);
+      if (croppedFile == null) {
+        debugPrint('[PhotoCaptureService] Cropping cancelled');
+        return null;
+      }
+
+      return _savePhoto(XFile(croppedFile.path), 'photo');
+    } catch (e) {
+      debugPrint('[PhotoCaptureService] Error capturing from camera with crop: $e');
+      rethrow;
+    }
+  }
+
+  /// Show the image cropper UI.
+  ///
+  /// Returns the cropped file, or null if cancelled.
+  Future<CroppedFile?> _cropImage(String sourcePath) async {
+    return await ImageCropper().cropImage(
+      sourcePath: sourcePath,
+      compressQuality: 85,
+      maxWidth: 1920,
+      maxHeight: 1920,
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: 'Crop Image',
+          toolbarColor: BrandColors.forest,
+          toolbarWidgetColor: Colors.white,
+          activeControlsWidgetColor: BrandColors.forest,
+          initAspectRatio: CropAspectRatioPreset.original,
+          lockAspectRatio: false,
+          hideBottomControls: false,
+        ),
+        IOSUiSettings(
+          title: 'Crop Image',
+          doneButtonTitle: 'Done',
+          cancelButtonTitle: 'Cancel',
+          aspectRatioLockEnabled: false,
+          resetAspectRatioEnabled: true,
+          rotateButtonsHidden: false,
+          rotateClockwiseButtonHidden: true,
+        ),
+      ],
+    );
   }
 
   /// Save the captured/selected photo to the assets folder.

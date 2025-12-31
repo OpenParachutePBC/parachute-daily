@@ -864,13 +864,13 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
     );
   }
 
-  /// Capture photo from camera
+  /// Capture photo from camera (with optional cropping)
   Future<void> _captureFromCamera() async {
     if (widget.onPhotoCaptured == null) return;
 
     try {
       final captureService = ref.read(photoCaptureServiceProvider);
-      final result = await captureService.captureFromCamera();
+      final result = await captureService.captureFromCameraWithCrop();
 
       if (result != null && mounted) {
         await widget.onPhotoCaptured!(result.relativePath);
@@ -888,13 +888,14 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
     }
   }
 
-  /// Select photo from gallery
+  /// Select photo from gallery (with cropping)
   Future<void> _selectFromGallery() async {
     if (widget.onPhotoCaptured == null) return;
 
     try {
       final captureService = ref.read(photoCaptureServiceProvider);
-      final result = await captureService.selectFromGallery();
+      // Use cropping - great for screenshots where you want to crop to relevant content
+      final result = await captureService.selectFromGalleryWithCrop();
 
       if (result != null && mounted) {
         await widget.onPhotoCaptured!(result.relativePath);
