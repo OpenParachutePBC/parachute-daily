@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/services/file_system_service.dart';
 import '../../../core/providers/file_system_provider.dart';
+import '../../../core/providers/vision_provider.dart';
 import '../../recorder/providers/service_providers.dart';
 import '../../recorder/widgets/playback_controls.dart';
 import '../models/journal_day.dart';
@@ -232,6 +233,9 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
                 onVoiceRecorded: (transcript, audioPath, duration) =>
                     _addVoiceEntry(transcript, audioPath, duration),
                 onTranscriptReady: (transcript) => _updatePendingTranscription(transcript),
+                onPhotoCaptured: (imagePath) => _addPhotoEntry(imagePath),
+                onHandwritingCaptured: (imagePath, linedBackground) =>
+                    _addHandwritingEntry(imagePath, linedBackground),
               ),
           ],
         ),
@@ -301,6 +305,151 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
     } catch (e, st) {
       debugPrint('[JournalScreen] Error adding voice entry: $e');
       debugPrint('$st');
+    }
+  }
+
+  /// Add photo entry
+  Future<void> _addPhotoEntry(String imagePath) async {
+    debugPrint('[JournalScreen] Adding photo entry: $imagePath');
+
+    try {
+      final service = await ref.read(journalServiceFutureProvider.future);
+      final result = await service.addPhotoEntry(imagePath: imagePath);
+
+      debugPrint('[JournalScreen] Photo entry added, updating cache...');
+
+      // Update cache immediately for instant UI feedback
+      setState(() {
+        _cachedJournal = result.journal;
+        _shouldScrollToBottom = true;
+      });
+
+      // Also refresh provider in background
+      ref.invalidate(selectedJournalProvider);
+      ref.read(journalRefreshTriggerProvider.notifier).state++;
+
+      // Run OCR in background
+      _runOcrInBackground(result.entry);
+    } catch (e, st) {
+      debugPrint('[JournalScreen] Error adding photo entry: $e');
+      debugPrint('$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add photo: $e'),
+            backgroundColor: BrandColors.error,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Add handwriting entry
+  Future<void> _addHandwritingEntry(String imagePath, bool linedBackground) async {
+    debugPrint('[JournalScreen] Adding handwriting entry: $imagePath (lined: $linedBackground)');
+
+    try {
+      final service = await ref.read(journalServiceFutureProvider.future);
+      final result = await service.addHandwritingEntry(
+        imagePath: imagePath,
+        linedBackground: linedBackground,
+      );
+
+      debugPrint('[JournalScreen] Handwriting entry added, updating cache...');
+
+      // Update cache immediately for instant UI feedback
+      setState(() {
+        _cachedJournal = result.journal;
+        _shouldScrollToBottom = true;
+      });
+
+      // Also refresh provider in background
+      ref.invalidate(selectedJournalProvider);
+      ref.read(journalRefreshTriggerProvider.notifier).state++;
+
+      // Run OCR in background
+      _runOcrInBackground(result.entry);
+    } catch (e, st) {
+      debugPrint('[JournalScreen] Error adding handwriting entry: $e');
+      debugPrint('$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add handwriting: $e'),
+            backgroundColor: BrandColors.error,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Run OCR in background for photo/handwriting entries
+  Future<void> _runOcrInBackground(JournalEntry entry) async {
+    if (entry.imagePath == null) return;
+
+    debugPrint('[JournalScreen] Running OCR in background for entry ${entry.id}...');
+
+    try {
+      final visionService = ref.read(visionServiceProvider);
+      if (!await visionService.isReady()) {
+        debugPrint('[JournalScreen] Vision service not ready, skipping OCR');
+        return;
+      }
+
+      // Get the full image path
+      final fileSystemService = ref.read(fileSystemServiceProvider);
+      final vaultPath = await fileSystemService.getRootPath();
+      final fullImagePath = '$vaultPath/${entry.imagePath}';
+
+      // Run OCR
+      final result = await visionService.recognizeText(fullImagePath);
+      debugPrint('[JournalScreen] OCR complete: ${result.text.length} chars');
+
+      if (result.hasText) {
+        // Update the entry with the extracted text
+        final service = await ref.read(journalServiceFutureProvider.future);
+        final selectedDate = ref.read(selectedJournalDateProvider);
+        final updatedEntry = entry.copyWith(content: result.text);
+        await service.updateEntry(selectedDate, updatedEntry);
+
+        // Update cache immediately to show the text
+        if (mounted && _cachedJournal != null) {
+          setState(() {
+            _cachedJournal = _cachedJournal!.updateEntry(updatedEntry);
+          });
+        }
+
+        // Refresh the journal provider in background
+        ref.invalidate(selectedJournalProvider);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.text_fields, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  const Text('Text extracted from image'),
+                ],
+              ),
+              backgroundColor: BrandColors.forest,
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+              margin: const EdgeInsets.all(16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          );
+        }
+      } else {
+        debugPrint('[JournalScreen] No text found in image');
+      }
+    } catch (e) {
+      debugPrint('[JournalScreen] OCR failed: $e');
+      // Don't show error to user - OCR failure is not critical
     }
   }
 
@@ -1409,6 +1558,10 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
         return Icons.link;
       case JournalEntryType.text:
         return Icons.edit_note;
+      case JournalEntryType.photo:
+        return Icons.photo_camera;
+      case JournalEntryType.handwriting:
+        return Icons.draw;
     }
   }
 
@@ -1420,6 +1573,10 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
         return BrandColors.forest;
       case JournalEntryType.text:
         return BrandColors.driftwood;
+      case JournalEntryType.photo:
+        return BrandColors.forest;
+      case JournalEntryType.handwriting:
+        return BrandColors.turquoise;
     }
   }
 

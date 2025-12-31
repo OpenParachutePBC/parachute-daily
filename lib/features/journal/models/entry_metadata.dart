@@ -22,11 +22,14 @@ enum TranscriptionStatus {
 /// such as audio paths, duration, and transcription status.
 @immutable
 class EntryMetadata {
-  /// Entry type (voice, text, linked)
+  /// Entry type (voice, text, linked, photo, handwriting)
   final JournalEntryType type;
 
   /// Audio file path (relative to vault), if voice entry
   final String? audioPath;
+
+  /// Image file path (relative to vault), if photo/handwriting entry
+  final String? imagePath;
 
   /// Duration in seconds, if voice entry
   final int? durationSeconds;
@@ -37,12 +40,17 @@ class EntryMetadata {
   /// Time the entry was created (HH:MM format)
   final String? createdTime;
 
+  /// Whether handwriting entry has lined paper background
+  final bool? linedBackground;
+
   const EntryMetadata({
     required this.type,
     this.audioPath,
+    this.imagePath,
     this.durationSeconds,
     this.transcriptionStatus,
     this.createdTime,
+    this.linedBackground,
   });
 
   /// Create from a simple audio path (legacy format compatibility)
@@ -80,6 +88,32 @@ class EntryMetadata {
     );
   }
 
+  /// Create for a photo entry
+  factory EntryMetadata.photo({
+    required String imagePath,
+    required String createdTime,
+  }) {
+    return EntryMetadata(
+      type: JournalEntryType.photo,
+      imagePath: imagePath,
+      createdTime: createdTime,
+    );
+  }
+
+  /// Create for a handwriting entry
+  factory EntryMetadata.handwriting({
+    required String imagePath,
+    required String createdTime,
+    bool linedBackground = false,
+  }) {
+    return EntryMetadata(
+      type: JournalEntryType.handwriting,
+      imagePath: imagePath,
+      createdTime: createdTime,
+      linedBackground: linedBackground,
+    );
+  }
+
   /// Parse from YAML map
   factory EntryMetadata.fromYaml(Map<dynamic, dynamic> yaml) {
     // Handle simple string value (legacy format: just audio path)
@@ -103,9 +137,11 @@ class EntryMetadata {
     return EntryMetadata(
       type: type,
       audioPath: yaml['audio'] as String?,
+      imagePath: yaml['image'] as String?,
       durationSeconds: yaml['duration'] as int?,
       transcriptionStatus: status,
       createdTime: yaml['created'] as String?,
+      linedBackground: yaml['lined_background'] as bool?,
     );
   }
 
@@ -118,6 +154,9 @@ class EntryMetadata {
     if (audioPath != null) {
       map['audio'] = audioPath;
     }
+    if (imagePath != null) {
+      map['image'] = imagePath;
+    }
     if (durationSeconds != null) {
       map['duration'] = durationSeconds;
     }
@@ -126,6 +165,9 @@ class EntryMetadata {
     }
     if (createdTime != null) {
       map['created'] = createdTime;
+    }
+    if (linedBackground != null) {
+      map['lined_background'] = linedBackground;
     }
 
     return map;
@@ -136,13 +178,36 @@ class EntryMetadata {
     return EntryMetadata(
       type: type,
       audioPath: audioPath,
+      imagePath: imagePath,
       durationSeconds: durationSeconds,
       transcriptionStatus: status,
       createdTime: createdTime,
+      linedBackground: linedBackground,
+    );
+  }
+
+  /// Create a copy with updated fields
+  EntryMetadata copyWith({
+    JournalEntryType? type,
+    String? audioPath,
+    String? imagePath,
+    int? durationSeconds,
+    TranscriptionStatus? transcriptionStatus,
+    String? createdTime,
+    bool? linedBackground,
+  }) {
+    return EntryMetadata(
+      type: type ?? this.type,
+      audioPath: audioPath ?? this.audioPath,
+      imagePath: imagePath ?? this.imagePath,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      transcriptionStatus: transcriptionStatus ?? this.transcriptionStatus,
+      createdTime: createdTime ?? this.createdTime,
+      linedBackground: linedBackground ?? this.linedBackground,
     );
   }
 
   @override
   String toString() =>
-      'EntryMetadata(type: $type, audio: $audioPath, duration: $durationSeconds, status: $transcriptionStatus)';
+      'EntryMetadata(type: $type, audio: $audioPath, image: $imagePath, duration: $durationSeconds, status: $transcriptionStatus)';
 }

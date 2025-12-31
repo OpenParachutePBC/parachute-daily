@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/design_tokens.dart';
+import '../../capture/providers/capture_providers.dart';
+import '../../capture/screens/handwriting_screen.dart';
 import '../../recorder/providers/service_providers.dart';
 import '../../recorder/providers/transcription_progress_provider.dart';
 import '../../recorder/providers/transcription_init_provider.dart';
@@ -18,12 +20,18 @@ class JournalInputBar extends ConsumerStatefulWidget {
       onVoiceRecorded;
   /// Called when background transcription completes - allows updating the entry
   final Future<void> Function(String transcript)? onTranscriptReady;
+  /// Called when a photo is captured from camera or gallery
+  final Future<void> Function(String imagePath)? onPhotoCaptured;
+  /// Called when handwriting canvas is saved
+  final Future<void> Function(String imagePath, bool linedBackground)? onHandwritingCaptured;
 
   const JournalInputBar({
     super.key,
     required this.onTextSubmitted,
     this.onVoiceRecorded,
     this.onTranscriptReady,
+    this.onPhotoCaptured,
+    this.onHandwritingCaptured,
   });
 
   @override
@@ -473,7 +481,19 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
           children: [
             // Voice record button
             _buildVoiceButton(isDark),
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
+
+            // Photo button
+            if (widget.onPhotoCaptured != null)
+              _buildPhotoButton(isDark),
+            if (widget.onPhotoCaptured != null)
+              const SizedBox(width: 4),
+
+            // Handwriting button
+            if (widget.onHandwritingCaptured != null)
+              _buildHandwritingButton(isDark),
+            if (widget.onHandwritingCaptured != null)
+              const SizedBox(width: 8),
 
             // Text input field
             Expanded(
@@ -660,6 +680,56 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
     );
   }
 
+  Widget _buildPhotoButton(bool isDark) {
+    final isDisabled = _isRecording || _isProcessing;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: isDisabled
+            ? (isDark ? BrandColors.charcoal : BrandColors.stone)
+            : (isDark ? BrandColors.nightSurfaceElevated : BrandColors.forestMist),
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        onPressed: isDisabled ? null : _showPhotoOptions,
+        tooltip: 'Add photo',
+        icon: Icon(
+          Icons.camera_alt,
+          color: isDisabled ? BrandColors.driftwood : BrandColors.forest,
+          size: 22,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHandwritingButton(bool isDark) {
+    final isDisabled = _isRecording || _isProcessing;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: isDisabled
+            ? (isDark ? BrandColors.charcoal : BrandColors.stone)
+            : (isDark ? BrandColors.nightSurfaceElevated : BrandColors.turquoise.withValues(alpha: 0.15)),
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        onPressed: isDisabled ? null : _openHandwritingCanvas,
+        tooltip: 'Handwriting',
+        icon: Icon(
+          Icons.edit,
+          color: isDisabled ? BrandColors.driftwood : BrandColors.turquoise,
+          size: 22,
+        ),
+      ),
+    );
+  }
+
   /// Show recording options bottom sheet (long press on mic)
   void _showRecordingOptions() {
     final theme = Theme.of(context);
@@ -721,6 +791,143 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
         ),
       ),
     );
+  }
+
+  /// Show photo options bottom sheet (camera / gallery)
+  void _showPhotoOptions() {
+    if (widget.onPhotoCaptured == null) return;
+
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? BrandColors.nightSurfaceElevated : BrandColors.softWhite,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              width: 32,
+              height: 4,
+              decoration: BoxDecoration(
+                color: isDark ? BrandColors.charcoal : BrandColors.stone,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                'Add Photo',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? BrandColors.softWhite : BrandColors.ink,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // Take photo option
+            ListTile(
+              leading: Icon(Icons.camera_alt, color: BrandColors.forest),
+              title: const Text('Take Photo'),
+              subtitle: const Text('Use your camera'),
+              onTap: () {
+                Navigator.pop(context);
+                _captureFromCamera();
+              },
+            ),
+
+            // Choose from gallery option
+            ListTile(
+              leading: Icon(Icons.photo_library, color: BrandColors.turquoise),
+              title: const Text('Choose from Gallery'),
+              subtitle: const Text('Select an existing photo'),
+              onTap: () {
+                Navigator.pop(context);
+                _selectFromGallery();
+              },
+            ),
+
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Capture photo from camera
+  Future<void> _captureFromCamera() async {
+    if (widget.onPhotoCaptured == null) return;
+
+    try {
+      final captureService = ref.read(photoCaptureServiceProvider);
+      final result = await captureService.captureFromCamera();
+
+      if (result != null && mounted) {
+        await widget.onPhotoCaptured!(result.relativePath);
+      }
+    } catch (e) {
+      debugPrint('[JournalInputBar] Camera capture failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to capture photo: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Select photo from gallery
+  Future<void> _selectFromGallery() async {
+    if (widget.onPhotoCaptured == null) return;
+
+    try {
+      final captureService = ref.read(photoCaptureServiceProvider);
+      final result = await captureService.selectFromGallery();
+
+      if (result != null && mounted) {
+        await widget.onPhotoCaptured!(result.relativePath);
+      }
+    } catch (e) {
+      debugPrint('[JournalInputBar] Gallery selection failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to select photo: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Open handwriting canvas
+  Future<void> _openHandwritingCanvas() async {
+    if (widget.onHandwritingCaptured == null) return;
+
+    final result = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => HandwritingScreen(
+          onSaved: (imagePath, linedBackground) {
+            widget.onHandwritingCaptured!(imagePath, linedBackground);
+          },
+        ),
+      ),
+    );
+
+    debugPrint('[JournalInputBar] Handwriting result: $result');
   }
 
   Widget _buildSendButton(bool isDark) {

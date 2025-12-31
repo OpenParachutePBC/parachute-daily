@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/design_tokens.dart';
+import '../../../core/providers/file_system_provider.dart';
 import '../../recorder/providers/transcription_init_provider.dart';
 import '../models/journal_entry.dart';
 
@@ -124,6 +126,12 @@ class JournalEntryCard extends ConsumerWidget {
               if (entry.hasAudio && audioPath != null) ...[
                 const SizedBox(height: 12),
                 _buildAudioChip(context, isDark),
+              ],
+
+              // Image thumbnail for photo/handwriting entries
+              if (entry.hasImage) ...[
+                const SizedBox(height: 12),
+                _buildImageThumbnail(context, ref, isDark),
               ],
 
               // Transcribe button for pending entries
@@ -318,6 +326,12 @@ class JournalEntryCard extends ConsumerWidget {
       case JournalEntryType.text:
         icon = Icons.edit_note;
         color = BrandColors.driftwood;
+      case JournalEntryType.photo:
+        icon = Icons.photo_camera;
+        color = BrandColors.forest;
+      case JournalEntryType.handwriting:
+        icon = Icons.draw;
+        color = BrandColors.turquoise;
     }
 
     return Container(
@@ -393,6 +407,104 @@ class JournalEntryCard extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Widget _buildImageThumbnail(BuildContext context, WidgetRef ref, bool isDark) {
+    if (entry.imagePath == null) return const SizedBox.shrink();
+
+    return FutureBuilder<String>(
+      future: _getFullImagePath(ref),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return Container(
+            height: 120,
+            decoration: BoxDecoration(
+              color: isDark ? BrandColors.charcoal : BrandColors.stone,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Center(
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+
+        final fullPath = snapshot.data!;
+        final file = File(fullPath);
+
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: file.existsSync()
+              ? Image.file(
+                  file,
+                  height: 120,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      height: 120,
+                      decoration: BoxDecoration(
+                        color: isDark ? BrandColors.charcoal : BrandColors.stone,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.broken_image_outlined,
+                              color: BrandColors.driftwood,
+                              size: 24,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Image not available',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: BrandColors.driftwood,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                )
+              : Container(
+                  height: 120,
+                  decoration: BoxDecoration(
+                    color: isDark ? BrandColors.charcoal : BrandColors.stone,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.image_not_supported_outlined,
+                          color: BrandColors.driftwood,
+                          size: 24,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Image not found',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: BrandColors.driftwood,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+        );
+      },
+    );
+  }
+
+  Future<String> _getFullImagePath(WidgetRef ref) async {
+    final fileSystemService = ref.read(fileSystemServiceProvider);
+    final vaultPath = await fileSystemService.getRootPath();
+    return '$vaultPath/${entry.imagePath}';
   }
 
   Widget _buildTranscribeButton(BuildContext context, bool isDark, bool canTranscribe) {

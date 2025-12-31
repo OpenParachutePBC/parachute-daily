@@ -185,6 +185,18 @@ class FileSystemService {
     return '$_assetsFolderName/$month/$filename';
   }
 
+  /// Resolve a relative asset path to an absolute path
+  /// This is useful for loading images from journal entries
+  Future<String> resolveAssetPath(String relativePath) async {
+    final root = await getRootPath();
+    return '$root/$relativePath';
+  }
+
+  /// Generate a path for a new image asset
+  Future<String> getNewImagePath(DateTime timestamp, String type) async {
+    return getNewAssetPath(timestamp, type, 'png');
+  }
+
   // ============================================================
   // Temporary Audio File Management
   // ============================================================

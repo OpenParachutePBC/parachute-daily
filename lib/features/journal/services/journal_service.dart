@@ -142,8 +142,10 @@ class JournalService {
     JournalEntryType type = JournalEntryType.text,
     String? audioPath,
     String? linkedFilePath,
+    String? imagePath,
     int? durationSeconds,
     bool isPendingTranscription = false,
+    bool? linedBackground,
   }) async {
     // Use surgical append - preserves external edits
     final entry = await appendEntryToFile(
@@ -153,8 +155,10 @@ class JournalService {
       type: type,
       audioPath: audioPath,
       linkedFilePath: linkedFilePath,
+      imagePath: imagePath,
       durationSeconds: durationSeconds,
       isPendingTranscription: isPendingTranscription,
+      linedBackground: linedBackground,
     );
 
     // Reload the journal to get updated state
@@ -257,6 +261,52 @@ class JournalService {
     );
   }
 
+  /// Add a photo entry to today's journal
+  ///
+  /// The image should already be saved to the assets folder.
+  /// Pass the relative path (e.g., "assets/2025-12/...").
+  /// Returns both the entry and updated journal for optimistic UI updates.
+  Future<({JournalEntry entry, JournalDay journal})> addPhotoEntry({
+    required String imagePath,
+    String? extractedText,
+    String? title,
+  }) async {
+    final now = DateTime.now();
+    final defaultTitle = _formatTime(now);
+
+    return addEntry(
+      date: now,
+      title: title ?? defaultTitle,
+      content: extractedText ?? '',
+      type: JournalEntryType.photo,
+      imagePath: imagePath,
+    );
+  }
+
+  /// Add a handwriting entry to today's journal
+  ///
+  /// The canvas image should already be saved to the assets folder.
+  /// Pass the relative path (e.g., "assets/2025-12/...").
+  /// Returns both the entry and updated journal for optimistic UI updates.
+  Future<({JournalEntry entry, JournalDay journal})> addHandwritingEntry({
+    required String imagePath,
+    String? extractedText,
+    String? title,
+    bool linedBackground = false,
+  }) async {
+    final now = DateTime.now();
+    final defaultTitle = _formatTime(now);
+
+    return addEntry(
+      date: now,
+      title: title ?? defaultTitle,
+      content: extractedText ?? '',
+      type: JournalEntryType.handwriting,
+      imagePath: imagePath,
+      linedBackground: linedBackground,
+    );
+  }
+
   /// Update an existing entry (uses surgical file edit)
   Future<void> updateEntry(DateTime date, JournalEntry entry) async {
     await updateEntryInFile(date, entry);
@@ -303,8 +353,10 @@ class JournalService {
     JournalEntryType type = JournalEntryType.text,
     String? audioPath,
     String? linkedFilePath,
+    String? imagePath,
     int? durationSeconds,
     bool isPendingTranscription = false,
+    bool? linedBackground,
   }) async {
     await ensureDirectoryExists();
 
@@ -321,6 +373,7 @@ class JournalService {
       createdAt: now,
       audioPath: audioPath,
       linkedFilePath: linkedFilePath,
+      imagePath: imagePath,
       durationSeconds: durationSeconds,
       isPendingTranscription: isPendingTranscription,
     );
@@ -336,6 +389,17 @@ class JournalService {
       );
     } else if (type == JournalEntryType.text) {
       metadata = EntryMetadata.text(createdTime: _formatTime(now));
+    } else if (type == JournalEntryType.photo && imagePath != null) {
+      metadata = EntryMetadata.photo(
+        imagePath: imagePath,
+        createdTime: _formatTime(now),
+      );
+    } else if (type == JournalEntryType.handwriting && imagePath != null) {
+      metadata = EntryMetadata.handwriting(
+        imagePath: imagePath,
+        createdTime: _formatTime(now),
+        linedBackground: linedBackground ?? false,
+      );
     }
 
     // Read existing file content (or create new)
@@ -1044,7 +1108,9 @@ class JournalService {
             ? JournalEntryType.linked
             : metadata?.audioPath != null
                 ? JournalEntryType.voice
-                : JournalEntryType.text);
+                : metadata?.imagePath != null
+                    ? JournalEntryType.photo
+                    : JournalEntryType.text);
 
     // Check if this is a pending transcription
     final isPending = metadata?.transcriptionStatus == TranscriptionStatus.pending ||
@@ -1058,6 +1124,7 @@ class JournalService {
       createdAt: DateTime.now(),
       linkedFilePath: linkedFile,
       audioPath: metadata?.audioPath,
+      imagePath: metadata?.imagePath,
       durationSeconds: metadata?.durationSeconds ?? 0,
       isPlainMarkdown: isPlainMarkdown,
       isPendingTranscription: isPending,

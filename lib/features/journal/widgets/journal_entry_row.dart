@@ -1,13 +1,16 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/design_tokens.dart';
+import '../../../core/providers/file_system_provider.dart';
 import '../models/journal_entry.dart';
 
 /// Minimal, markdown-native entry display
 ///
 /// Displays entries as document sections rather than cards,
 /// making the journal feel more like a native markdown editor.
-class JournalEntryRow extends StatefulWidget {
+class JournalEntryRow extends ConsumerStatefulWidget {
   final JournalEntry entry;
   final String? audioPath;
   final bool isEditing;
@@ -48,10 +51,10 @@ class JournalEntryRow extends StatefulWidget {
   });
 
   @override
-  State<JournalEntryRow> createState() => _JournalEntryRowState();
+  ConsumerState<JournalEntryRow> createState() => _JournalEntryRowState();
 }
 
-class _JournalEntryRowState extends State<JournalEntryRow> {
+class _JournalEntryRowState extends ConsumerState<JournalEntryRow> {
   late TextEditingController _contentController;
   late TextEditingController _titleController;
   final FocusNode _contentFocusNode = FocusNode();
@@ -144,6 +147,10 @@ class _JournalEntryRowState extends State<JournalEntryRow> {
             // Linked file indicator
             if (entry.isLinked && entry.linkedFilePath != null)
               _buildLinkedIndicator(context, isDark),
+
+            // Image thumbnail for photo/handwriting entries
+            if (entry.hasImage)
+              _buildImageThumbnail(context, isDark),
 
             // Done button when editing
             if (widget.isEditing) _buildEditActions(context, isDark),
@@ -399,6 +406,12 @@ class _JournalEntryRowState extends State<JournalEntryRow> {
       case JournalEntryType.text:
         icon = Icons.edit_note;
         color = isDark ? BrandColors.driftwood : BrandColors.stone;
+      case JournalEntryType.photo:
+        icon = Icons.photo_camera;
+        color = BrandColors.forest;
+      case JournalEntryType.handwriting:
+        icon = Icons.draw;
+        color = BrandColors.turquoise;
     }
 
     return Icon(icon, size: 16, color: color);
@@ -643,5 +656,112 @@ class _JournalEntryRowState extends State<JournalEntryRow> {
         ],
       ),
     );
+  }
+
+  Widget _buildImageThumbnail(BuildContext context, bool isDark) {
+    if (widget.entry.imagePath == null) return const SizedBox.shrink();
+
+    return FutureBuilder<String>(
+      future: _getFullImagePath(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Container(
+              height: 80,
+              decoration: BoxDecoration(
+                color: isDark ? BrandColors.charcoal : BrandColors.stone,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          );
+        }
+
+        final file = File(snapshot.data!);
+
+        return Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: file.existsSync()
+                ? Image.file(
+                    file,
+                    height: 160,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 80,
+                        decoration: BoxDecoration(
+                          color: isDark ? BrandColors.charcoal : BrandColors.stone,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.broken_image_outlined,
+                                color: BrandColors.driftwood,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Image not available',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: BrandColors.driftwood,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  )
+                : Container(
+                    height: 80,
+                    decoration: BoxDecoration(
+                      color: isDark ? BrandColors.charcoal : BrandColors.stone,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.image_not_supported_outlined,
+                            color: BrandColors.driftwood,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Image not found',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: BrandColors.driftwood,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<String> _getFullImagePath() async {
+    final fileSystemService = ref.read(fileSystemServiceProvider);
+    final vaultPath = await fileSystemService.getRootPath();
+    return '$vaultPath/${widget.entry.imagePath}';
   }
 }

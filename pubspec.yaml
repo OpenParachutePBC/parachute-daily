@@ -77,6 +77,13 @@ dependencies:
   # BM25 keyword search for local RAG
   bm25: ^1.0.0
 
+  # Image Capture & Vision
+  image_picker: ^1.1.2
+  google_mlkit_text_recognition: ^0.14.0
+
+  # Handwriting Canvas
+  perfect_freehand: ^2.5.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

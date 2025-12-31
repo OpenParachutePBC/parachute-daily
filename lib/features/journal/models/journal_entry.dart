@@ -10,6 +10,12 @@ enum JournalEntryType {
 
   /// Link to a longer recording in a separate file
   linked,
+
+  /// Photo entry (camera or gallery)
+  photo,
+
+  /// Handwriting canvas entry
+  handwriting,
 }
 
 /// A single entry in a journal day.
@@ -39,6 +45,9 @@ class JournalEntry {
   /// Path to linked full transcript file, if this is a linked entry
   final String? linkedFilePath;
 
+  /// Path to image file (relative to vault), for photo/handwriting entries
+  final String? imagePath;
+
   /// Duration of the audio in seconds, if voice entry
   final int? durationSeconds;
 
@@ -58,6 +67,7 @@ class JournalEntry {
     required this.createdAt,
     this.audioPath,
     this.linkedFilePath,
+    this.imagePath,
     this.durationSeconds,
     this.isPlainMarkdown = false,
     bool isPendingTranscription = false,
@@ -65,6 +75,9 @@ class JournalEntry {
 
   /// Whether this entry has an associated audio file
   bool get hasAudio => audioPath != null;
+
+  /// Whether this entry has an associated image file
+  bool get hasImage => imagePath != null;
 
   /// Whether this entry links to a separate file
   bool get isLinked => linkedFilePath != null;
@@ -135,6 +148,42 @@ class JournalEntry {
     );
   }
 
+  /// Create a photo entry (camera or gallery)
+  factory JournalEntry.photo({
+    required String id,
+    required String title,
+    required String imagePath,
+    String content = '', // OCR-extracted text or description
+    DateTime? createdAt,
+  }) {
+    return JournalEntry(
+      id: id,
+      title: title,
+      content: content,
+      type: JournalEntryType.photo,
+      createdAt: createdAt ?? DateTime.now(),
+      imagePath: imagePath,
+    );
+  }
+
+  /// Create a handwriting canvas entry
+  factory JournalEntry.handwriting({
+    required String id,
+    required String title,
+    required String imagePath,
+    String content = '', // OCR-extracted text
+    DateTime? createdAt,
+  }) {
+    return JournalEntry(
+      id: id,
+      title: title,
+      content: content,
+      type: JournalEntryType.handwriting,
+      createdAt: createdAt ?? DateTime.now(),
+      imagePath: imagePath,
+    );
+  }
+
   /// Create a copy with updated fields
   JournalEntry copyWith({
     String? id,
@@ -144,6 +193,7 @@ class JournalEntry {
     DateTime? createdAt,
     String? audioPath,
     String? linkedFilePath,
+    String? imagePath,
     int? durationSeconds,
     bool? isPlainMarkdown,
     bool? isPendingTranscription,
@@ -156,6 +206,7 @@ class JournalEntry {
       createdAt: createdAt ?? this.createdAt,
       audioPath: audioPath ?? this.audioPath,
       linkedFilePath: linkedFilePath ?? this.linkedFilePath,
+      imagePath: imagePath ?? this.imagePath,
       durationSeconds: durationSeconds ?? this.durationSeconds,
       isPlainMarkdown: isPlainMarkdown ?? this.isPlainMarkdown,
       isPendingTranscription: isPendingTranscription ?? _isPendingTranscription,

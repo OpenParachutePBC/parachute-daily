@@ -93,6 +93,12 @@ class JournalDay {
   /// Get audio path for an entry
   String? getAudioPath(String entryId) => assets[entryId];
 
+  /// Get image path for an entry
+  String? getImagePath(String entryId) {
+    final metadata = entryMetadata[entryId];
+    return metadata?.imagePath;
+  }
+
   /// Get all entries with pending transcriptions
   List<JournalEntry> get pendingTranscriptions =>
       entries.where((e) => e.isPendingTranscription).toList();
