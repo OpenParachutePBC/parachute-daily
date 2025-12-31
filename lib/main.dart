@@ -10,7 +10,7 @@ import 'core/theme/app_theme.dart';
 import 'core/services/logger_service.dart';
 import 'core/services/file_system_service.dart';
 import 'features/home/screens/home_screen.dart';
-import 'features/onboarding/screens/onboarding_screen.dart';
+import 'features/onboarding/screens/onboarding_flow.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -126,7 +126,9 @@ class _InitialScreenState extends State<_InitialScreen> {
     }
 
     if (_needsOnboarding) {
-      return const OnboardingScreen();
+      return OnboardingFlow(
+        onComplete: () => setState(() => _needsOnboarding = false),
+      );
     }
 
     return const HomeScreen();
