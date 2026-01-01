@@ -67,6 +67,9 @@ dependencies:
   # Notifications
   flutter_local_notifications: ^17.0.0
 
+  # Background/Foreground Service for continuous recording
+  flutter_foreground_task: ^8.13.2
+
   # Sherpa-ONNX for local ASR (Parakeet)
   sherpa_onnx: ^1.12.12
 

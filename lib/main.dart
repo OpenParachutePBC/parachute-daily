@@ -11,11 +11,22 @@ import 'core/services/logger_service.dart';
 import 'core/services/file_system_service.dart';
 import 'features/home/screens/home_screen.dart';
 import 'features/onboarding/screens/onboarding_flow.dart';
+import 'features/recorder/services/background_recording_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final log = logger.createLogger('Main');
+
+  // Initialize background recording service for lifecycle monitoring
+  try {
+    log.debug('Initializing background recording service...');
+    await BackgroundRecordingService().initialize();
+    log.info('Background recording service initialized');
+  } catch (e, stackTrace) {
+    log.warn('Failed to initialize background recording service', error: e);
+    debugPrint('Stack trace: $stackTrace');
+  }
 
   // Initialize Opus codec for Omi BLE audio decoding (iOS/Android only)
   if (Platform.isIOS || Platform.isAndroid) {

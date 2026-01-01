@@ -7,6 +7,7 @@ import 'package:record/record.dart';
 import 'package:parachute_daily/features/recorder/services/transcription_service_adapter.dart';
 import 'package:parachute_daily/features/recorder/services/vad/smart_chunker.dart';
 import 'package:parachute_daily/features/recorder/services/audio_processing/simple_noise_filter.dart';
+import 'package:parachute_daily/features/recorder/services/background_recording_service.dart';
 import 'package:parachute_daily/core/services/file_system_service.dart';
 
 /// Audio debug metrics for visualization
@@ -79,8 +80,13 @@ enum TranscriptionSegmentStatus {
 /// Platform-adaptive transcription:
 /// - iOS/macOS: Uses Parakeet v3 (fast, high-quality)
 /// - Android: Uses Whisper (fallback)
+///
+/// Background recording:
+/// - Android: Uses foreground service to continue in background
+/// - iOS: Uses background audio mode
 class AutoPauseTranscriptionService {
   final TranscriptionServiceAdapter _transcriptionService;
+  final BackgroundRecordingService _backgroundService = BackgroundRecordingService();
 
   // Recording state
   final AudioRecorder _recorder = AudioRecorder();
@@ -95,11 +101,19 @@ class AutoPauseTranscriptionService {
   // Noise filtering & VAD
   SimpleNoiseFilter? _noiseFilter;
   SmartChunker? _chunker;
-  final List<List<int>> _allAudioSamples = []; // Complete recording
+  final List<List<int>> _allAudioSamples = []; // Buffer for pending samples
+
+  // Streaming to disk - write audio incrementally to avoid memory buildup
+  IOSink? _audioFileSink;
+  int _totalSamplesWritten = 0;
+  static const int _flushThreshold = 16000 * 10; // Flush every ~10 seconds of audio
 
   // File management
   String? _audioFilePath;
   String? _tempDirectory;
+
+  // Queue size limit to prevent unbounded growth
+  static const int _maxQueueSize = 20;
 
   // Segments (auto-detected paragraphs)
   final List<TranscriptionSegment> _segments = [];
@@ -198,6 +212,10 @@ class AutoPauseTranscriptionService {
       final fileSystem = FileSystemService();
       _audioFilePath = await fileSystem.getRecordingTempPath();
 
+      // Initialize streaming WAV file with placeholder header
+      // Header will be updated with correct size when recording stops
+      await _initializeStreamingWavFile(_audioFilePath!);
+
       // Start recording with stream
       // Note: Keeping minimal OS processing to reduce CoreAudio instability
       debugPrint('[AutoPauseTranscription] 🎙️ Starting audio stream...');
@@ -222,6 +240,11 @@ class AutoPauseTranscriptionService {
       _nextSegmentIndex = 1;
       _allAudioSamples.clear();
       _processingQueue.clear();
+      _totalSamplesWritten = 0;
+
+      // Notify background service that recording started
+      // This starts the foreground service on Android
+      await _backgroundService.onRecordingStarted(_audioFilePath);
 
       // Reset stream health monitoring
       _lastAudioChunkTime = DateTime.now();
@@ -326,23 +349,119 @@ class AutoPauseTranscriptionService {
       );
     }
 
-    // Save clean audio to complete recording
+    // Save clean audio to buffer (for transcription segments)
     _allAudioSamples.add(cleanSamples);
+
+    // Stream audio to disk incrementally to avoid memory buildup
+    _streamAudioToDisk(cleanSamples);
 
     // Process clean audio through SmartChunker (VAD + auto-chunking)
     _chunker!.processSamples(cleanSamples);
 
     // Debug: Show VAD stats periodically
-    if (_allAudioSamples.length % 100 == 0) {
+    if (_audioChunkCount % 100 == 0) {
       // Every ~1 second (100 chunks)
       final stats = _chunker!.stats;
+      final memoryMB = (_allAudioSamples.fold<int>(0, (sum, s) => sum + s.length) * 2) / (1024 * 1024);
       debugPrint(
         '[AutoPauseTranscription] VAD Stats: '
         'Speech: ${stats.vadStats.speechDuration.inMilliseconds}ms, '
         'Silence: ${stats.vadStats.silenceDuration.inMilliseconds}ms, '
-        'Buffer: ${stats.bufferDuration.inSeconds}s',
+        'Buffer: ${stats.bufferDuration.inSeconds}s, '
+        'Disk: ${(_totalSamplesWritten / 16000).toStringAsFixed(1)}s, '
+        'Memory: ${memoryMB.toStringAsFixed(1)}MB',
       );
     }
+  }
+
+  /// Initialize WAV file for streaming audio data
+  Future<void> _initializeStreamingWavFile(String path) async {
+    final file = File(path);
+    _audioFileSink = file.openWrite();
+
+    // Write WAV header with placeholder size (will update on close)
+    // RIFF header
+    _audioFileSink!.add([0x52, 0x49, 0x46, 0x46]); // "RIFF"
+    _audioFileSink!.add([0x00, 0x00, 0x00, 0x00]); // Placeholder file size - 8
+    _audioFileSink!.add([0x57, 0x41, 0x56, 0x45]); // "WAVE"
+
+    // fmt chunk
+    _audioFileSink!.add([0x66, 0x6D, 0x74, 0x20]); // "fmt "
+    _audioFileSink!.add([0x10, 0x00, 0x00, 0x00]); // Chunk size (16)
+    _audioFileSink!.add([0x01, 0x00]); // Audio format (1 = PCM)
+    _audioFileSink!.add([0x01, 0x00]); // Num channels (1 = mono)
+    _audioFileSink!.add([0x80, 0x3E, 0x00, 0x00]); // Sample rate (16000)
+    _audioFileSink!.add([0x00, 0x7D, 0x00, 0x00]); // Byte rate (32000)
+    _audioFileSink!.add([0x02, 0x00]); // Block align (2)
+    _audioFileSink!.add([0x10, 0x00]); // Bits per sample (16)
+
+    // data chunk header
+    _audioFileSink!.add([0x64, 0x61, 0x74, 0x61]); // "data"
+    _audioFileSink!.add([0x00, 0x00, 0x00, 0x00]); // Placeholder data size
+
+    await _audioFileSink!.flush();
+    _totalSamplesWritten = 0;
+
+    debugPrint('[AutoPauseTranscription] Initialized streaming WAV: $path');
+  }
+
+  /// Stream audio samples to disk
+  void _streamAudioToDisk(List<int> samples) {
+    if (_audioFileSink == null) return;
+
+    // Convert samples to bytes and write
+    final bytes = Uint8List(samples.length * 2);
+    for (int i = 0; i < samples.length; i++) {
+      final sample = samples[i];
+      bytes[i * 2] = sample & 0xFF;
+      bytes[i * 2 + 1] = (sample >> 8) & 0xFF;
+    }
+    _audioFileSink!.add(bytes);
+    _totalSamplesWritten += samples.length;
+
+    // Periodically flush to ensure data is persisted
+    if (_totalSamplesWritten % _flushThreshold < samples.length) {
+      _audioFileSink!.flush();
+      debugPrint('[AutoPauseTranscription] Flushed ${_totalSamplesWritten ~/ 16000}s of audio to disk');
+    }
+  }
+
+  /// Finalize WAV file by updating header with correct sizes
+  Future<void> _finalizeStreamingWavFile() async {
+    if (_audioFileSink == null || _audioFilePath == null) return;
+
+    await _audioFileSink!.flush();
+    await _audioFileSink!.close();
+    _audioFileSink = null;
+
+    // Update WAV header with correct sizes
+    final file = File(_audioFilePath!);
+    final raf = await file.open(mode: FileMode.writeOnlyAppend);
+
+    final dataSize = _totalSamplesWritten * 2; // 2 bytes per sample
+    final fileSize = dataSize + 36; // WAV header is 44 bytes, so file size - 8 = 36 + dataSize
+
+    // Update RIFF chunk size at offset 4
+    await raf.setPosition(4);
+    await raf.writeFrom([
+      fileSize & 0xFF,
+      (fileSize >> 8) & 0xFF,
+      (fileSize >> 16) & 0xFF,
+      (fileSize >> 24) & 0xFF,
+    ]);
+
+    // Update data chunk size at offset 40
+    await raf.setPosition(40);
+    await raf.writeFrom([
+      dataSize & 0xFF,
+      (dataSize >> 8) & 0xFF,
+      (dataSize >> 16) & 0xFF,
+      (dataSize >> 24) & 0xFF,
+    ]);
+
+    await raf.close();
+
+    debugPrint('[AutoPauseTranscription] Finalized WAV: ${dataSize ~/ 1024}KB, ${_totalSamplesWritten ~/ 16000}s');
   }
 
   /// Start periodic health check for audio stream
@@ -501,10 +620,15 @@ class AutoPauseTranscriptionService {
         '[AutoPauseTranscription] Queue: ${_processingQueue.length}, Active: $_activeTranscriptions',
       );
 
-      // Merge all audio into final WAV file
-      if (_allAudioSamples.isNotEmpty && _audioFilePath != null) {
-        await _saveCompleteRecording();
-      }
+      // Finalize WAV file (streaming approach - audio already written to disk)
+      await _finalizeStreamingWavFile();
+
+      // Clear in-memory buffer now that audio is safely on disk
+      _allAudioSamples.clear();
+
+      // Notify background service that recording stopped
+      // This stops the foreground service on Android
+      await _backgroundService.onRecordingStopped();
 
       debugPrint('[AutoPauseTranscription] Recording stopped: $_audioFilePath');
       return _audioFilePath;
@@ -540,10 +664,26 @@ class AutoPauseTranscriptionService {
         _chunker = null;
       }
 
+      // Close and delete the streaming WAV file
+      if (_audioFileSink != null) {
+        await _audioFileSink!.close();
+        _audioFileSink = null;
+      }
+      if (_audioFilePath != null) {
+        final file = File(_audioFilePath!);
+        if (await file.exists()) {
+          await file.delete();
+          debugPrint('[AutoPauseTranscription] Deleted incomplete recording');
+        }
+      }
+
       // Clear all data
       _segments.clear();
       _allAudioSamples.clear();
       _processingQueue.clear();
+
+      // Notify background service that recording stopped
+      await _backgroundService.onRecordingStopped();
 
       debugPrint('[AutoPauseTranscription] Recording cancelled');
     } catch (e) {
@@ -552,7 +692,28 @@ class AutoPauseTranscriptionService {
   }
 
   /// Queue a segment for transcription (non-blocking)
+  ///
+  /// Implements backpressure: if queue is full, drops oldest pending segments
   void _queueSegmentForProcessing(List<int> samples) {
+    // Backpressure: if queue is too large, drop oldest pending segment
+    if (_processingQueue.length >= _maxQueueSize) {
+      final dropped = _processingQueue.removeAt(0);
+      debugPrint(
+        '[AutoPauseTranscription] ⚠️ Queue full, dropping segment ${dropped.index}',
+      );
+      // Update the dropped segment status in UI
+      final droppedIdx = _segments.indexWhere((s) => s.index == dropped.index);
+      if (droppedIdx != -1) {
+        _segments[droppedIdx] = _segments[droppedIdx].copyWith(
+          status: TranscriptionSegmentStatus.failed,
+          text: '[Skipped - queue full]',
+        );
+        if (!_segmentStreamController.isClosed) {
+          _segmentStreamController.add(_segments[droppedIdx]);
+        }
+      }
+    }
+
     final segment = _QueuedSegment(
       index: _nextSegmentIndex++,
       samples: samples,
@@ -709,25 +870,6 @@ class AutoPauseTranscriptionService {
     } catch (e) {
       debugPrint('[AutoPauseTranscription] Failed to process segment: $e');
     }
-  }
-
-  /// Save complete recording as WAV file
-  Future<void> _saveCompleteRecording() async {
-    if (_audioFilePath == null || _allAudioSamples.isEmpty) return;
-
-    // Flatten all samples
-    final allSamples = <int>[];
-    for (final chunk in _allAudioSamples) {
-      allSamples.addAll(chunk);
-    }
-
-    // Save to WAV file
-    await _saveSamplesToWav(allSamples, _audioFilePath!);
-
-    debugPrint(
-      '[AutoPauseTranscription] Saved complete recording: '
-      '${allSamples.length} samples',
-    );
   }
 
   /// Save int16 samples to WAV file
