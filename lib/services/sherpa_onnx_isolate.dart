@@ -17,6 +17,10 @@ class SherpaOnnxIsolate {
   final Completer<void> _ready = Completer<void>();
   bool _isInitialized = false;
 
+  // Track if initialization is in progress to prevent race conditions
+  bool _isInitializing = false;
+  Completer<void>? _initCompleter;
+
   // Track if models are available (checked on main thread)
   bool _modelsAvailable = false;
 
@@ -52,6 +56,20 @@ class SherpaOnnxIsolate {
       onStatus?.call('Ready');
       return;
     }
+
+    // If initialization is already in progress, wait for it to complete
+    if (_isInitializing && _initCompleter != null) {
+      debugPrint('[SherpaOnnxIsolate] Initialization already in progress, waiting...');
+      onStatus?.call('Waiting for initialization...');
+      await _initCompleter!.future;
+      onProgress?.call(1.0);
+      onStatus?.call('Ready');
+      return;
+    }
+
+    // Mark initialization as in progress
+    _isInitializing = true;
+    _initCompleter = Completer<void>();
 
     debugPrint('[SherpaOnnxIsolate] Starting background isolate...');
     onStatus?.call('Starting transcription service...');
@@ -128,10 +146,19 @@ class SherpaOnnxIsolate {
       }
     });
 
-    await initCompleter.future;
-    _ready.complete();
-
-    debugPrint('[SherpaOnnxIsolate] ✅ Background isolate ready');
+    try {
+      await initCompleter.future;
+      _ready.complete();
+      debugPrint('[SherpaOnnxIsolate] ✅ Background isolate ready');
+      // Signal any waiting callers that init is done
+      _initCompleter?.complete();
+    } catch (e) {
+      // Signal error to waiting callers
+      _initCompleter?.completeError(e);
+      rethrow;
+    } finally {
+      _isInitializing = false;
+    }
   }
 
   /// Transcribe audio file in background isolate

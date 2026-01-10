@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:parachute_daily/features/recorder/services/transcription_service_adapter.dart';
 import 'package:parachute_daily/features/recorder/services/vad/smart_chunker.dart';
 import 'package:parachute_daily/features/recorder/services/audio_processing/simple_noise_filter.dart';
 import 'package:parachute_daily/features/recorder/services/background_recording_service.dart';
 import 'package:parachute_daily/core/services/file_system_service.dart';
+import 'package:path/path.dart' as path;
 
 /// Audio debug metrics for visualization
 class AudioDebugMetrics {
@@ -67,23 +70,161 @@ enum TranscriptionSegmentStatus {
   processing, // Currently being transcribed
   completed, // Transcription done
   failed, // Transcription error
+  interrupted, // Was processing when app closed (for recovery)
+}
+
+/// Persisted segment for background recovery
+/// Stored in JSON file to survive app restarts
+class PersistedSegment {
+  final int index;
+  final String audioFilePath;
+  final int startOffsetBytes; // Byte offset in audio file (after WAV header)
+  final int durationSamples; // Number of samples
+  final TranscriptionSegmentStatus status;
+  final String? transcribedText;
+  final DateTime createdAt;
+  final DateTime? completedAt;
+
+  PersistedSegment({
+    required this.index,
+    required this.audioFilePath,
+    required this.startOffsetBytes,
+    required this.durationSamples,
+    required this.status,
+    this.transcribedText,
+    required this.createdAt,
+    this.completedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'index': index,
+    'audioFilePath': audioFilePath,
+    'startOffsetBytes': startOffsetBytes,
+    'durationSamples': durationSamples,
+    'status': status.name,
+    'transcribedText': transcribedText,
+    'createdAt': createdAt.toIso8601String(),
+    'completedAt': completedAt?.toIso8601String(),
+  };
+
+  factory PersistedSegment.fromJson(Map<String, dynamic> json) {
+    return PersistedSegment(
+      index: json['index'] as int,
+      audioFilePath: json['audioFilePath'] as String,
+      startOffsetBytes: json['startOffsetBytes'] as int,
+      durationSamples: json['durationSamples'] as int,
+      status: TranscriptionSegmentStatus.values.firstWhere(
+        (s) => s.name == json['status'],
+        orElse: () => TranscriptionSegmentStatus.pending,
+      ),
+      transcribedText: json['transcribedText'] as String?,
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      completedAt: json['completedAt'] != null
+          ? DateTime.parse(json['completedAt'] as String)
+          : null,
+    );
+  }
+
+  PersistedSegment copyWith({
+    int? index,
+    String? audioFilePath,
+    int? startOffsetBytes,
+    int? durationSamples,
+    TranscriptionSegmentStatus? status,
+    String? transcribedText,
+    DateTime? createdAt,
+    DateTime? completedAt,
+  }) {
+    return PersistedSegment(
+      index: index ?? this.index,
+      audioFilePath: audioFilePath ?? this.audioFilePath,
+      startOffsetBytes: startOffsetBytes ?? this.startOffsetBytes,
+      durationSamples: durationSamples ?? this.durationSamples,
+      status: status ?? this.status,
+      transcribedText: transcribedText ?? this.transcribedText,
+      createdAt: createdAt ?? this.createdAt,
+      completedAt: completedAt ?? this.completedAt,
+    );
+  }
+}
+
+/// Streaming transcription state for UI
+/// Transcription model status
+enum TranscriptionModelStatus {
+  notInitialized, // Model not yet initialized
+  initializing, // Model is loading
+  ready, // Model ready for transcription
+  error, // Initialization failed
+}
+
+class StreamingTranscriptionState {
+  final List<String> confirmedSegments; // Finalized text segments
+  final String? interimText; // Currently being transcribed (may change)
+  final bool isRecording;
+  final bool isProcessing;
+  final Duration recordingDuration;
+  final double vadLevel; // 0.0 to 1.0 speech energy level
+  final TranscriptionModelStatus modelStatus; // Track model initialization
+
+  const StreamingTranscriptionState({
+    this.confirmedSegments = const [],
+    this.interimText,
+    this.isRecording = false,
+    this.isProcessing = false,
+    this.recordingDuration = Duration.zero,
+    this.vadLevel = 0.0,
+    this.modelStatus = TranscriptionModelStatus.notInitialized,
+  });
+
+  StreamingTranscriptionState copyWith({
+    List<String>? confirmedSegments,
+    String? interimText,
+    bool? clearInterim,
+    bool? isRecording,
+    bool? isProcessing,
+    Duration? recordingDuration,
+    double? vadLevel,
+    TranscriptionModelStatus? modelStatus,
+  }) {
+    return StreamingTranscriptionState(
+      confirmedSegments: confirmedSegments ?? this.confirmedSegments,
+      interimText: clearInterim == true ? null : (interimText ?? this.interimText),
+      isRecording: isRecording ?? this.isRecording,
+      isProcessing: isProcessing ?? this.isProcessing,
+      recordingDuration: recordingDuration ?? this.recordingDuration,
+      vadLevel: vadLevel ?? this.vadLevel,
+      modelStatus: modelStatus ?? this.modelStatus,
+    );
+  }
+
+  /// Get all text (confirmed + interim) for display
+  /// Uses single newlines between segments for natural flow
+  String get displayText {
+    final confirmed = confirmedSegments.join('\n');
+    if (interimText != null && interimText!.isNotEmpty) {
+      return confirmed.isEmpty ? interimText! : '$confirmed\n$interimText';
+    }
+    return confirmed;
+  }
 }
 
 /// Auto-pause transcription service using VAD-based chunking
 ///
-/// Flow (Phase 1 - Simple noise filtering):
+/// **Streaming Transcription Architecture**:
 /// 1. User starts recording → Continuous audio capture
-/// 2. Audio → High-pass filter (removes low-freq noise) → SmartChunker (VAD) → Auto-detects silence
-/// 3. On 1s silence → Auto-chunks → Transcribes
-/// 4. User stops → Transcribes final segment
+/// 2. Audio → Noise filter → VAD → Rolling buffer (30s)
+/// 3. Every 3s during speech → Re-transcribe last 15s → Stream interim text
+/// 4. On 1s silence → Finalize chunk → Confirmed text
+/// 5. On stop → Flush with 2s silence → Capture final words
+///
+/// **Background Recovery**:
+/// - Segments persisted to JSON before transcription
+/// - On app restart, pending segments recovered from disk
+/// - Audio file retained for 7 days for crash recovery
 ///
 /// Platform-adaptive transcription:
 /// - iOS/macOS: Uses Parakeet v3 (fast, high-quality)
-/// - Android: Uses Whisper (fallback)
-///
-/// Background recording:
-/// - Android: Uses foreground service to continue in background
-/// - iOS: Uses background audio mode
+/// - Android: Uses Sherpa-ONNX with Parakeet
 class AutoPauseTranscriptionService {
   final TranscriptionServiceAdapter _transcriptionService;
   final BackgroundRecordingService _backgroundService = BackgroundRecordingService();
@@ -91,6 +232,7 @@ class AutoPauseTranscriptionService {
   // Recording state
   final AudioRecorder _recorder = AudioRecorder();
   bool _isRecording = false;
+  DateTime? _recordingStartTime;
 
   // Stream health monitoring
   DateTime? _lastAudioChunkTime;
@@ -102,6 +244,32 @@ class AutoPauseTranscriptionService {
   SimpleNoiseFilter? _noiseFilter;
   SmartChunker? _chunker;
   final List<List<int>> _allAudioSamples = []; // Buffer for pending samples
+
+  // === STREAMING TRANSCRIPTION (Phase 1) ===
+  // Rolling buffer for re-transcription (keeps last 30s of audio)
+  List<int> _rollingAudioBuffer = [];
+  static const int _rollingBufferMaxSamples = 16000 * 30; // 30 seconds
+  static const int _reTranscriptionWindowSamples = 16000 * 15; // 15 seconds
+  static const Duration _reTranscriptionInterval = Duration(seconds: 3);
+
+  Timer? _reTranscriptionTimer;
+  Timer? _recordingDurationTimer;
+  String _interimText = '';
+  bool _isReTranscribing = false;
+
+  // Confirmed segments (finalized after silence detection)
+  final List<String> _confirmedSegments = [];
+
+  // Map from queued segment index to confirmed segment index
+  // This ensures official transcriptions update the correct confirmed segment
+  final Map<int, int> _segmentToConfirmedIndex = {};
+
+  // Track sample offset for segment persistence
+  int _segmentStartOffset = 0; // Byte offset where current segment starts
+
+  // === PERSISTENCE (Phase 2) ===
+  static const String _pendingSegmentsFileName = 'pending_segments.json';
+  String? _pendingSegmentsPath;
 
   // Streaming to disk - write audio incrementally to avoid memory buildup
   IOSink? _audioFileSink;
@@ -134,6 +302,14 @@ class AutoPauseTranscriptionService {
   final _streamHealthController =
       StreamController<bool>.broadcast(); // true = healthy, false = broken
 
+  // === NEW: Streaming state for UI ===
+  final _streamingStateController =
+      StreamController<StreamingTranscriptionState>.broadcast();
+  final _interimTextController = StreamController<String>.broadcast();
+
+  // Track transcription model status
+  TranscriptionModelStatus _modelStatus = TranscriptionModelStatus.notInitialized;
+
   Stream<TranscriptionSegment> get segmentStream =>
       _segmentStreamController.stream;
   Stream<bool> get isProcessingStream => _processingStreamController.stream;
@@ -143,9 +319,30 @@ class AutoPauseTranscriptionService {
       _debugMetricsController.stream;
   Stream<bool> get streamHealthStream => _streamHealthController.stream;
 
+  /// Stream of interim text updates (re-transcribed every 3s during speech)
+  Stream<String> get interimTextStream => _interimTextController.stream;
+
+  /// Stream of complete streaming state for UI
+  Stream<StreamingTranscriptionState> get streamingStateStream =>
+      _streamingStateController.stream;
+
+  /// Current streaming state snapshot
+  StreamingTranscriptionState get currentStreamingState => StreamingTranscriptionState(
+    confirmedSegments: List.unmodifiable(_confirmedSegments),
+    interimText: _interimText.isNotEmpty ? _interimText : null,
+    isRecording: _isRecording,
+    isProcessing: _isProcessingQueue,
+    recordingDuration: _recordingStartTime != null
+        ? DateTime.now().difference(_recordingStartTime!)
+        : Duration.zero,
+    vadLevel: _chunker?.stats.vadStats.isSpeaking == true ? 1.0 : 0.0,
+  );
+
   bool get isRecording => _isRecording;
   bool get isProcessing => _isProcessingQueue;
   List<TranscriptionSegment> get segments => List.unmodifiable(_segments);
+  List<String> get confirmedSegments => List.unmodifiable(_confirmedSegments);
+  String get interimText => _interimText;
 
   AutoPauseTranscriptionService(this._transcriptionService);
 
@@ -157,7 +354,198 @@ class AutoPauseTranscriptionService {
     final fileSystem = FileSystemService();
     _tempDirectory = await fileSystem.getTempAudioPath();
 
+    // Set up persistence path
+    _pendingSegmentsPath = path.join(_tempDirectory!, _pendingSegmentsFileName);
+
     debugPrint('[AutoPauseTranscription] Initialized with temp dir: $_tempDirectory');
+
+    // Check for and recover pending segments from previous session
+    await _recoverPendingSegments();
+  }
+
+  // ============================================================
+  // PHASE 2: PERSISTENCE - Save and recover segments across restarts
+  // ============================================================
+
+  /// Recover pending segments from a previous interrupted session
+  Future<void> _recoverPendingSegments() async {
+    if (_pendingSegmentsPath == null) return;
+
+    final file = File(_pendingSegmentsPath!);
+    if (!await file.exists()) {
+      debugPrint('[AutoPauseTranscription] No pending segments to recover');
+      return;
+    }
+
+    try {
+      final jsonString = await file.readAsString();
+      final List<dynamic> jsonList = jsonDecode(jsonString) as List<dynamic>;
+
+      final pendingSegments = jsonList
+          .map((json) => PersistedSegment.fromJson(json as Map<String, dynamic>))
+          .where((s) =>
+              s.status == TranscriptionSegmentStatus.pending ||
+              s.status == TranscriptionSegmentStatus.processing ||
+              s.status == TranscriptionSegmentStatus.interrupted)
+          .toList();
+
+      if (pendingSegments.isEmpty) {
+        debugPrint('[AutoPauseTranscription] No pending segments to recover');
+        await file.delete();
+        return;
+      }
+
+      debugPrint('[AutoPauseTranscription] 🔄 Recovering ${pendingSegments.length} pending segments');
+
+      for (final segment in pendingSegments) {
+        // Check if audio file still exists
+        final audioFile = File(segment.audioFilePath);
+        if (!await audioFile.exists()) {
+          debugPrint('[AutoPauseTranscription] ⚠️ Audio file missing for segment ${segment.index}');
+          await _updatePersistedSegmentStatus(
+            segment.index,
+            TranscriptionSegmentStatus.failed,
+            text: '[Audio file missing]',
+          );
+          continue;
+        }
+
+        // Extract segment audio from the file
+        try {
+          final audioBytes = await audioFile.readAsBytes();
+          final wavHeaderSize = 44; // Standard WAV header
+          final startOffset = segment.startOffsetBytes + wavHeaderSize;
+          final endOffset = startOffset + (segment.durationSamples * 2);
+
+          if (endOffset > audioBytes.length) {
+            debugPrint('[AutoPauseTranscription] ⚠️ Segment ${segment.index} exceeds audio file length');
+            await _updatePersistedSegmentStatus(
+              segment.index,
+              TranscriptionSegmentStatus.failed,
+              text: '[Invalid audio range]',
+            );
+            continue;
+          }
+
+          // Convert bytes to samples
+          final segmentBytes = audioBytes.sublist(startOffset, endOffset);
+          final samples = _bytesToInt16(Uint8List.fromList(segmentBytes));
+
+          debugPrint('[AutoPauseTranscription] 🔄 Queueing recovered segment ${segment.index} (${samples.length} samples)');
+
+          // Queue for transcription
+          _queueSegmentForProcessing(samples, recoveredIndex: segment.index);
+        } catch (e) {
+          debugPrint('[AutoPauseTranscription] ❌ Failed to recover segment ${segment.index}: $e');
+          await _updatePersistedSegmentStatus(
+            segment.index,
+            TranscriptionSegmentStatus.failed,
+            text: '[Recovery failed: $e]',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[AutoPauseTranscription] ❌ Failed to parse pending segments: $e');
+      // Delete corrupted file
+      await file.delete();
+    }
+  }
+
+  /// Save a segment to persistent storage before transcription
+  Future<void> _persistSegment(PersistedSegment segment) async {
+    if (_pendingSegmentsPath == null) return;
+
+    try {
+      final file = File(_pendingSegmentsPath!);
+      List<PersistedSegment> segments = [];
+
+      // Load existing segments
+      if (await file.exists()) {
+        final jsonString = await file.readAsString();
+        final List<dynamic> jsonList = jsonDecode(jsonString) as List<dynamic>;
+        segments = jsonList
+            .map((json) => PersistedSegment.fromJson(json as Map<String, dynamic>))
+            .toList();
+      }
+
+      // Add or update segment
+      final existingIndex = segments.indexWhere((s) => s.index == segment.index);
+      if (existingIndex != -1) {
+        segments[existingIndex] = segment;
+      } else {
+        segments.add(segment);
+      }
+
+      // Write back
+      await file.writeAsString(jsonEncode(segments.map((s) => s.toJson()).toList()));
+      debugPrint('[AutoPauseTranscription] 💾 Persisted segment ${segment.index}');
+    } catch (e) {
+      debugPrint('[AutoPauseTranscription] ⚠️ Failed to persist segment: $e');
+    }
+  }
+
+  /// Update a persisted segment's status
+  Future<void> _updatePersistedSegmentStatus(
+    int index,
+    TranscriptionSegmentStatus status, {
+    String? text,
+  }) async {
+    if (_pendingSegmentsPath == null) return;
+
+    try {
+      final file = File(_pendingSegmentsPath!);
+      if (!await file.exists()) return;
+
+      final jsonString = await file.readAsString();
+      final List<dynamic> jsonList = jsonDecode(jsonString) as List<dynamic>;
+      final segments = jsonList
+          .map((json) => PersistedSegment.fromJson(json as Map<String, dynamic>))
+          .toList();
+
+      final segmentIdx = segments.indexWhere((s) => s.index == index);
+      if (segmentIdx == -1) return;
+
+      segments[segmentIdx] = segments[segmentIdx].copyWith(
+        status: status,
+        transcribedText: text,
+        completedAt: status == TranscriptionSegmentStatus.completed ||
+                status == TranscriptionSegmentStatus.failed
+            ? DateTime.now()
+            : null,
+      );
+
+      await file.writeAsString(jsonEncode(segments.map((s) => s.toJson()).toList()));
+    } catch (e) {
+      debugPrint('[AutoPauseTranscription] ⚠️ Failed to update persisted segment: $e');
+    }
+  }
+
+  /// Clean up completed segments from persistence
+  Future<void> _cleanupCompletedSegments() async {
+    if (_pendingSegmentsPath == null) return;
+
+    try {
+      final file = File(_pendingSegmentsPath!);
+      if (!await file.exists()) return;
+
+      final jsonString = await file.readAsString();
+      final List<dynamic> jsonList = jsonDecode(jsonString) as List<dynamic>;
+      final segments = jsonList
+          .map((json) => PersistedSegment.fromJson(json as Map<String, dynamic>))
+          .where((s) =>
+              s.status != TranscriptionSegmentStatus.completed &&
+              s.status != TranscriptionSegmentStatus.failed)
+          .toList();
+
+      if (segments.isEmpty) {
+        await file.delete();
+        debugPrint('[AutoPauseTranscription] 🧹 Cleaned up all completed segments');
+      } else {
+        await file.writeAsString(jsonEncode(segments.map((s) => s.toJson()).toList()));
+      }
+    } catch (e) {
+      debugPrint('[AutoPauseTranscription] ⚠️ Failed to cleanup segments: $e');
+    }
   }
 
   /// Start auto-pause recording
@@ -174,14 +562,22 @@ class AutoPauseTranscriptionService {
     }
 
     try {
-      // Check microphone permission
-      final hasPermission = await _recorder.hasPermission();
-      if (!hasPermission) {
-        debugPrint('[AutoPauseTranscription] ⚠️ Microphone permission denied!');
-        debugPrint(
-          '[AutoPauseTranscription] ℹ️ Grant access: System Settings → Privacy & Security → Microphone → Enable "Parachute"',
-        );
-        return false;
+      // On Android/iOS, try to request permission if not already granted
+      // But don't fail here - let the actual recording attempt be the authority
+      if (Platform.isAndroid || Platform.isIOS) {
+        try {
+          final status = await Permission.microphone.status;
+          debugPrint('[AutoPauseTranscription] Mic permission status: $status');
+          if (!status.isGranted && !status.isLimited) {
+            debugPrint('[AutoPauseTranscription] Requesting microphone permission...');
+            final requestResult = await Permission.microphone.request();
+            debugPrint('[AutoPauseTranscription] Permission request result: $requestResult');
+            // Don't return false here - the actual startStream call will fail
+            // if permission is truly denied, and we'll handle it there
+          }
+        } catch (e) {
+          debugPrint('[AutoPauseTranscription] Permission check failed: $e - proceeding anyway');
+        }
       }
 
       // Ensure temp directory exists
@@ -219,28 +615,51 @@ class AutoPauseTranscriptionService {
       // Start recording with stream
       // Note: Keeping minimal OS processing to reduce CoreAudio instability
       debugPrint('[AutoPauseTranscription] 🎙️ Starting audio stream...');
-      final stream = await _recorder.startStream(
-        const RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: 16000,
-          numChannels: 1,
-          // Minimal OS processing to reduce CoreAudio issues
-          echoCancel: false, // Not needed for voice notes
-          autoGain: true, // Keep for consistent volume
-          noiseSuppress: false, // We handle filtering ourselves
-        ),
-      );
+      Stream<Uint8List> stream;
+      try {
+        stream = await _recorder.startStream(
+          const RecordConfig(
+            encoder: AudioEncoder.pcm16bits,
+            sampleRate: 16000,
+            numChannels: 1,
+            // Minimal OS processing to reduce CoreAudio issues
+            echoCancel: false, // Not needed for voice notes
+            autoGain: true, // Keep for consistent volume
+            noiseSuppress: false, // We handle filtering ourselves
+          ),
+        );
+        debugPrint('[AutoPauseTranscription] ✅ Audio stream started successfully');
+      } catch (e) {
+        debugPrint('[AutoPauseTranscription] ❌ Failed to start audio stream: $e');
+        // This is where we actually fail if permission is denied
+        return false;
+      }
 
       debugPrint(
         '[AutoPauseTranscription] Audio config: autoGain=true, echoCancel=false, noiseSuppress=false',
       );
 
       _isRecording = true;
+      _recordingStartTime = DateTime.now();
       _segments.clear();
       _nextSegmentIndex = 1;
       _allAudioSamples.clear();
       _processingQueue.clear();
       _totalSamplesWritten = 0;
+
+      // Reset streaming state
+      _rollingAudioBuffer = [];
+      _interimText = '';
+      _confirmedSegments.clear();
+      _segmentToConfirmedIndex.clear();
+      _segmentStartOffset = 0;
+
+      // Set initial model status - check if already ready
+      final isModelReady = await _transcriptionService.isReady();
+      _modelStatus = isModelReady
+          ? TranscriptionModelStatus.ready
+          : TranscriptionModelStatus.initializing;
+      debugPrint('[AutoPauseTranscription] Initial model status: $_modelStatus (isReady=$isModelReady)');
 
       // Notify background service that recording started
       // This starts the foreground service on Android
@@ -249,6 +668,15 @@ class AutoPauseTranscriptionService {
       // Reset stream health monitoring
       _lastAudioChunkTime = DateTime.now();
       _audioChunkCount = 0;
+
+      // Start re-transcription loop for streaming feedback
+      _startReTranscriptionLoop();
+
+      // Start recording duration timer for UI updates
+      _startRecordingDurationTimer();
+
+      // Emit initial streaming state
+      _emitStreamingState();
 
       // Process audio stream through VAD chunker (store subscription for cleanup)
       debugPrint('[AutoPauseTranscription] 🎧 Setting up stream listener...');
@@ -278,9 +706,6 @@ class AutoPauseTranscriptionService {
       _startStreamHealthCheck();
 
       debugPrint('[AutoPauseTranscription] ✅ Recording started with VAD');
-      debugPrint(
-        '[AutoPauseTranscription] Microphone permission: $hasPermission',
-      );
       return true;
     } catch (e) {
       debugPrint('[AutoPauseTranscription] Failed to start: $e');
@@ -352,11 +777,26 @@ class AutoPauseTranscriptionService {
     // Save clean audio to buffer (for transcription segments)
     _allAudioSamples.add(cleanSamples);
 
+    // Add to rolling buffer for streaming re-transcription
+    _rollingAudioBuffer.addAll(cleanSamples);
+    // Trim to max size (keep last 30s)
+    if (_rollingAudioBuffer.length > _rollingBufferMaxSamples) {
+      _rollingAudioBuffer = _rollingAudioBuffer.sublist(
+        _rollingAudioBuffer.length - _rollingBufferMaxSamples,
+      );
+    }
+
     // Stream audio to disk incrementally to avoid memory buildup
     _streamAudioToDisk(cleanSamples);
 
     // Process clean audio through SmartChunker (VAD + auto-chunking)
     _chunker!.processSamples(cleanSamples);
+
+    // Emit VAD activity for UI
+    final isSpeaking = _chunker!.stats.vadStats.isSpeaking;
+    if (!_vadActivityController.isClosed) {
+      _vadActivityController.add(isSpeaking);
+    }
 
     // Debug: Show VAD stats periodically
     if (_audioChunkCount % 100 == 0) {
@@ -529,6 +969,206 @@ class AutoPauseTranscriptionService {
     debugPrint('[AutoPauseTranscription] 🔍 Stream health monitoring stopped');
   }
 
+  // ============================================================
+  // PHASE 1: STREAMING TRANSCRIPTION - Real-time feedback
+  // ============================================================
+
+  /// Start the re-transcription loop for streaming feedback
+  void _startReTranscriptionLoop() {
+    _reTranscriptionTimer?.cancel();
+
+    debugPrint('[AutoPauseTranscription] 🔄 Starting re-transcription loop (every ${_reTranscriptionInterval.inSeconds}s)');
+
+    _reTranscriptionTimer = Timer.periodic(_reTranscriptionInterval, (_) async {
+      // Only re-transcribe if we're recording and VAD detects speech
+      if (!_isRecording) return;
+      if (_chunker == null) return;
+
+      final isSpeaking = _chunker!.stats.vadStats.isSpeaking;
+      final hasSpeech = _chunker!.stats.vadStats.speechDuration > const Duration(milliseconds: 500);
+      final bufferSeconds = _rollingAudioBuffer.length / 16000;
+
+      // Check if model became ready while we were waiting
+      // This updates UI immediately when init completes mid-recording
+      if (_modelStatus == TranscriptionModelStatus.initializing) {
+        final isReady = await _transcriptionService.isReady();
+        if (isReady) {
+          debugPrint('[AutoPauseTranscription] ✅ Model became ready during recording!');
+          _updateModelStatus(TranscriptionModelStatus.ready);
+        }
+      }
+
+      debugPrint('[AutoPauseTranscription] 🔄 Re-transcription check: isSpeaking=$isSpeaking, hasSpeech=$hasSpeech, buffer=${bufferSeconds.toStringAsFixed(1)}s, modelStatus=$_modelStatus');
+
+      // Re-transcribe when there's active speech, recent speech, OR we have a decent buffer
+      // The buffer check ensures we transcribe even if VAD misses initial speech
+      if (isSpeaking || hasSpeech || bufferSeconds >= 3.0) {
+        _transcribeRollingBuffer();
+      }
+    });
+  }
+
+  /// Stop the re-transcription loop
+  void _stopReTranscriptionLoop() {
+    _reTranscriptionTimer?.cancel();
+    _reTranscriptionTimer = null;
+    debugPrint('[AutoPauseTranscription] 🔄 Re-transcription loop stopped');
+  }
+
+  /// Start recording duration timer for UI updates
+  void _startRecordingDurationTimer() {
+    _recordingDurationTimer?.cancel();
+
+    _recordingDurationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_isRecording) return;
+      _emitStreamingState();
+    });
+  }
+
+  /// Stop recording duration timer
+  void _stopRecordingDurationTimer() {
+    _recordingDurationTimer?.cancel();
+    _recordingDurationTimer = null;
+  }
+
+  /// Transcribe the rolling buffer for interim text display
+  Future<void> _transcribeRollingBuffer() async {
+    if (_isReTranscribing) {
+      debugPrint('[AutoPauseTranscription] 🔄 Skipping - already re-transcribing');
+      return;
+    }
+    if (_rollingAudioBuffer.isEmpty) {
+      debugPrint('[AutoPauseTranscription] 🔄 Skipping - buffer empty');
+      return;
+    }
+    if (_rollingAudioBuffer.length < 16000) {
+      debugPrint('[AutoPauseTranscription] 🔄 Skipping - buffer too small (${_rollingAudioBuffer.length} samples, need 16000)');
+      return;
+    }
+
+    _isReTranscribing = true;
+    debugPrint('[AutoPauseTranscription] 🔄 Starting re-transcription...');
+
+    try {
+      // Check if model is ready, if not show initializing status
+      final isReady = await _transcriptionService.isReady();
+      if (!isReady) {
+        if (_modelStatus != TranscriptionModelStatus.initializing) {
+          debugPrint('[AutoPauseTranscription] 🔄 Model not ready, starting initialization...');
+          _updateModelStatus(TranscriptionModelStatus.initializing);
+        }
+        // Model will be initialized lazily by transcribeAudio
+      }
+
+      // Take last 15 seconds (or whatever we have)
+      final samplesToTranscribe = _rollingAudioBuffer.length > _reTranscriptionWindowSamples
+          ? _rollingAudioBuffer.sublist(_rollingAudioBuffer.length - _reTranscriptionWindowSamples)
+          : List<int>.from(_rollingAudioBuffer);
+
+      final durationSec = samplesToTranscribe.length / 16000;
+      debugPrint('[AutoPauseTranscription] 🔄 Re-transcribing ${durationSec.toStringAsFixed(1)}s of audio for interim text');
+
+      // Save to temp file for transcription
+      final fileSystem = FileSystemService();
+      final tempPath = await fileSystem.getTranscriptionSegmentPath(-1); // -1 for interim
+
+      await _saveSamplesToWav(samplesToTranscribe, tempPath);
+
+      // Transcribe (this will lazy-init the model if needed)
+      final result = await _transcriptionService.transcribeAudio(tempPath);
+
+      // If we just finished initializing, update status to ready
+      if (_modelStatus != TranscriptionModelStatus.ready) {
+        debugPrint('[AutoPauseTranscription] ✅ Model is now ready');
+        _updateModelStatus(TranscriptionModelStatus.ready);
+      }
+
+      // Clean up temp file
+      try {
+        await File(tempPath).delete();
+      } catch (_) {}
+
+      // Update interim text
+      String newInterimText = result.text.trim();
+
+      // Remove any text that's already in confirmed segments
+      // This prevents showing duplicate text from the overlap buffer
+      if (newInterimText.isNotEmpty && _confirmedSegments.isNotEmpty) {
+        final lastConfirmed = _confirmedSegments.last.trim().toLowerCase();
+        final interimLower = newInterimText.toLowerCase();
+
+        // Check if interim starts with last confirmed text (from overlap)
+        if (interimLower.startsWith(lastConfirmed)) {
+          newInterimText = newInterimText.substring(lastConfirmed.length).trim();
+        } else {
+          // Check for partial overlap - find if last part of confirmed matches start of interim
+          // Look for overlapping suffix/prefix
+          for (int i = min(lastConfirmed.length, 50); i >= 10; i--) {
+            final suffix = lastConfirmed.substring(lastConfirmed.length - i);
+            if (interimLower.startsWith(suffix)) {
+              newInterimText = newInterimText.substring(i).trim();
+              break;
+            }
+          }
+        }
+      }
+
+      if (newInterimText.isNotEmpty && newInterimText != _interimText) {
+        _interimText = newInterimText;
+
+        if (!_interimTextController.isClosed) {
+          _interimTextController.add(_interimText);
+        }
+
+        _emitStreamingState();
+
+        debugPrint('[AutoPauseTranscription] 📝 Interim text: "${_interimText.substring(0, min(50, _interimText.length))}..."');
+      } else if (newInterimText.isEmpty && _interimText.isNotEmpty) {
+        // Clear interim if nothing new after deduplication
+        _interimText = '';
+        if (!_interimTextController.isClosed) {
+          _interimTextController.add('');
+        }
+        _emitStreamingState();
+      }
+    } catch (e) {
+      debugPrint('[AutoPauseTranscription] ⚠️ Re-transcription failed: $e');
+      // If transcription failed, update status to show error but keep trying
+      if (_modelStatus == TranscriptionModelStatus.initializing) {
+        // Model init might have failed - but don't give up, will retry next cycle
+        debugPrint('[AutoPauseTranscription] ⚠️ Transcription failed during init - will retry');
+      }
+    } finally {
+      _isReTranscribing = false;
+      debugPrint('[AutoPauseTranscription] 🔄 Re-transcription lock released');
+    }
+  }
+
+  /// Emit current streaming state to UI
+  void _emitStreamingState() {
+    if (_streamingStateController.isClosed) return;
+
+    final state = StreamingTranscriptionState(
+      confirmedSegments: List.unmodifiable(_confirmedSegments),
+      interimText: _interimText.isNotEmpty ? _interimText : null,
+      isRecording: _isRecording,
+      isProcessing: _isProcessingQueue,
+      recordingDuration: _recordingStartTime != null
+          ? DateTime.now().difference(_recordingStartTime!)
+          : Duration.zero,
+      vadLevel: _chunker?.stats.vadStats.isSpeaking == true ? 1.0 : 0.0,
+      modelStatus: _modelStatus,
+    );
+
+    _streamingStateController.add(state);
+  }
+
+  /// Update model status and emit state
+  void _updateModelStatus(TranscriptionModelStatus status) {
+    _modelStatus = status;
+    _emitStreamingState();
+  }
+
   /// Handle chunk ready from SmartChunker
   void _handleChunk(List<int> samples) {
     final duration = Duration(
@@ -540,8 +1180,43 @@ class AutoPauseTranscriptionService {
       'Duration: ${duration.inSeconds}s (${samples.length} samples)',
     );
 
-    // Queue for transcription
+    // Move current interim text to confirmed (if any)
+    // This provides immediate feedback while waiting for final transcription
+    final confirmedIdx = _confirmedSegments.length; // Index where we'll add this segment
+    if (_interimText.isNotEmpty) {
+      _confirmedSegments.add(_interimText);
+      _interimText = '';
+
+      if (!_interimTextController.isClosed) {
+        _interimTextController.add('');
+      }
+
+      _emitStreamingState();
+      debugPrint('[AutoPauseTranscription] ✅ Interim text moved to confirmed at index $confirmedIdx');
+    } else {
+      // Even if no interim text, add placeholder for this segment
+      _confirmedSegments.add('');
+      debugPrint('[AutoPauseTranscription] Added placeholder confirmed segment at index $confirmedIdx');
+    }
+
+    // Keep 5 second overlap in rolling buffer for context continuity
+    const overlapSamples = 16000 * 5;
+    if (_rollingAudioBuffer.length > overlapSamples) {
+      _rollingAudioBuffer = _rollingAudioBuffer.sublist(
+        _rollingAudioBuffer.length - overlapSamples,
+      );
+    } else {
+      _rollingAudioBuffer.clear();
+    }
+
+    // Queue for transcription (this will get the "official" transcription)
+    // Track the mapping so we update the correct confirmed segment later
+    final segmentIndex = _nextSegmentIndex; // This will be the segment index used
+    _segmentToConfirmedIndex[segmentIndex] = confirmedIdx;
     _queueSegmentForProcessing(samples);
+
+    // Update segment start offset for next segment
+    _segmentStartOffset = _totalSamplesWritten * 2; // Bytes
   }
 
   /// Stop recording and transcribe final segment
@@ -576,8 +1251,10 @@ class AutoPauseTranscriptionService {
         '[AutoPauseTranscription] Total audio chunks received: $_audioChunkCount',
       );
 
-      // Stop health check
+      // Stop timers first
       _stopStreamHealthCheck();
+      _stopReTranscriptionLoop();
+      _stopRecordingDurationTimer();
 
       // Cancel audio stream subscription before stopping recorder
       await _audioStreamSubscription?.cancel();
@@ -591,6 +1268,27 @@ class AutoPauseTranscriptionService {
       // The audio stream may still have buffered data that hasn't been delivered yet
       debugPrint('[AutoPauseTranscription] Waiting for stream to settle...');
       await Future.delayed(const Duration(milliseconds: 300));
+
+      // === PARAKEET FINAL FLUSH ===
+      // Parakeet's internal buffers need silence to flush the final word(s)
+      // Without this, the last 1-2 words are often lost
+      debugPrint('[AutoPauseTranscription] 🔊 Flushing Parakeet with silence...');
+      final silenceBuffer = List<int>.filled(16000 * 2, 0); // 2 seconds of silence
+      _rollingAudioBuffer.addAll(silenceBuffer);
+
+      // Do one final re-transcription with the silence-padded buffer
+      // This captures any final words that Parakeet was holding
+      if (_rollingAudioBuffer.length > 16000) {
+        await _transcribeRollingBuffer();
+
+        // If we got interim text from the flush, move it to confirmed
+        if (_interimText.isNotEmpty) {
+          _confirmedSegments.add(_interimText);
+          _interimText = '';
+          debugPrint('[AutoPauseTranscription] ✅ Final flush text moved to confirmed');
+        }
+      }
+
       debugPrint(
         '[AutoPauseTranscription] Stream settled, flushing final chunk...',
       );
@@ -613,18 +1311,26 @@ class AutoPauseTranscriptionService {
         _noiseFilter = null;
       }
 
+      // Emit final streaming state
+      _emitStreamingState();
+
       debugPrint(
         '[AutoPauseTranscription] Recording stopped, transcription continuing in background...',
       );
       debugPrint(
         '[AutoPauseTranscription] Queue: ${_processingQueue.length}, Active: $_activeTranscriptions',
       );
+      debugPrint(
+        '[AutoPauseTranscription] Confirmed segments: ${_confirmedSegments.length}',
+      );
 
       // Finalize WAV file (streaming approach - audio already written to disk)
       await _finalizeStreamingWavFile();
 
-      // Clear in-memory buffer now that audio is safely on disk
+      // Clear in-memory buffers now that audio is safely on disk
       _allAudioSamples.clear();
+      _rollingAudioBuffer.clear();
+      _recordingStartTime = null;
 
       // Notify background service that recording stopped
       // This stops the foreground service on Android
@@ -648,8 +1354,10 @@ class AutoPauseTranscriptionService {
         '[AutoPauseTranscription] Audio chunks received: $_audioChunkCount',
       );
 
-      // Stop health check
+      // Stop all timers
       _stopStreamHealthCheck();
+      _stopReTranscriptionLoop();
+      _stopRecordingDurationTimer();
 
       // Cancel audio stream subscription before stopping recorder
       await _audioStreamSubscription?.cancel();
@@ -658,6 +1366,7 @@ class AutoPauseTranscriptionService {
       // Stop recorder
       await _recorder.stop();
       _isRecording = false;
+      _recordingStartTime = null;
 
       // Clear chunker
       if (_chunker != null) {
@@ -677,10 +1386,16 @@ class AutoPauseTranscriptionService {
         }
       }
 
-      // Clear all data
+      // Clear all data including streaming state
       _segments.clear();
       _allAudioSamples.clear();
       _processingQueue.clear();
+      _rollingAudioBuffer.clear();
+      _interimText = '';
+      _confirmedSegments.clear();
+
+      // Emit final state
+      _emitStreamingState();
 
       // Notify background service that recording stopped
       await _backgroundService.onRecordingStopped();
@@ -694,7 +1409,8 @@ class AutoPauseTranscriptionService {
   /// Queue a segment for transcription (non-blocking)
   ///
   /// Implements backpressure: if queue is full, drops oldest pending segments
-  void _queueSegmentForProcessing(List<int> samples) {
+  /// If [recoveredIndex] is provided, uses that index (for recovery from persistence)
+  void _queueSegmentForProcessing(List<int> samples, {int? recoveredIndex}) {
     // Backpressure: if queue is too large, drop oldest pending segment
     if (_processingQueue.length >= _maxQueueSize) {
       final dropped = _processingQueue.removeAt(0);
@@ -712,10 +1428,18 @@ class AutoPauseTranscriptionService {
           _segmentStreamController.add(_segments[droppedIdx]);
         }
       }
+      // Update persistence
+      _updatePersistedSegmentStatus(
+        dropped.index,
+        TranscriptionSegmentStatus.failed,
+        text: '[Skipped - queue full]',
+      );
     }
 
+    final segmentIndex = recoveredIndex ?? _nextSegmentIndex++;
+
     final segment = _QueuedSegment(
-      index: _nextSegmentIndex++,
+      index: segmentIndex,
       samples: samples,
     );
 
@@ -733,6 +1457,19 @@ class AutoPauseTranscriptionService {
     );
     if (!_segmentStreamController.isClosed) {
       _segmentStreamController.add(_segments.last);
+    }
+
+    // Persist segment for background recovery (only for new segments, not recovered ones)
+    if (recoveredIndex == null && _audioFilePath != null) {
+      final persistedSegment = PersistedSegment(
+        index: segment.index,
+        audioFilePath: _audioFilePath!,
+        startOffsetBytes: _segmentStartOffset,
+        durationSamples: samples.length,
+        status: TranscriptionSegmentStatus.pending,
+        createdAt: DateTime.now(),
+      );
+      _persistSegment(persistedSegment);
     }
 
     // Start processing if not already running
@@ -776,6 +1513,12 @@ class AutoPauseTranscriptionService {
     if (!_segmentStreamController.isClosed) {
       _segmentStreamController.add(_segments[segmentIndex]);
     }
+
+    // Update persistence status
+    await _updatePersistedSegmentStatus(
+      segment.index,
+      TranscriptionSegmentStatus.processing,
+    );
 
     try {
       // Validate segment has audio data
@@ -828,18 +1571,45 @@ class AutoPauseTranscriptionService {
           throw Exception('Transcription returned empty text');
         }
 
+        final transcribedText = transcriptResult.text.trim();
+
         // Update with result
         _segments[segmentIndex] = _segments[segmentIndex].copyWith(
-          text: transcriptResult.text.trim(),
+          text: transcribedText,
           status: TranscriptionSegmentStatus.completed,
         );
         if (!_segmentStreamController.isClosed) {
           _segmentStreamController.add(_segments[segmentIndex]);
         }
 
-        debugPrint(
-          '[AutoPauseTranscription] Segment ${segment.index} done: "${transcriptResult.text}"',
+        // Update confirmed segments for streaming UI
+        // Use the mapping to update the correct confirmed segment
+        final confirmedIdx = _segmentToConfirmedIndex[segment.index];
+        if (confirmedIdx != null && confirmedIdx < _confirmedSegments.length) {
+          _confirmedSegments[confirmedIdx] = transcribedText;
+          debugPrint('[AutoPauseTranscription] Updated confirmed segment $confirmedIdx with official transcription');
+        } else {
+          // Fallback: add as new segment if mapping is missing
+          _confirmedSegments.add(transcribedText);
+          debugPrint('[AutoPauseTranscription] Added new confirmed segment (mapping missing for segment ${segment.index})');
+        }
+        _emitStreamingState();
+
+        // Update persistence
+        await _updatePersistedSegmentStatus(
+          segment.index,
+          TranscriptionSegmentStatus.completed,
+          text: transcribedText,
         );
+
+        debugPrint(
+          '[AutoPauseTranscription] Segment ${segment.index} done: "$transcribedText"',
+        );
+
+        // Cleanup completed segments periodically
+        if (segment.index % 5 == 0) {
+          await _cleanupCompletedSegments();
+        }
       } catch (e) {
         debugPrint('[AutoPauseTranscription] Transcription failed: $e');
 
@@ -852,6 +1622,13 @@ class AutoPauseTranscriptionService {
         } catch (_) {
           // Ignore cleanup errors
         }
+
+        // Update persistence with failure
+        await _updatePersistedSegmentStatus(
+          segment.index,
+          TranscriptionSegmentStatus.failed,
+          text: '[Transcription failed: $e]',
+        );
 
         _segments[segmentIndex] = _segments[segmentIndex].copyWith(
           text: '[Transcription failed]',
@@ -934,11 +1711,12 @@ class AutoPauseTranscriptionService {
   }
 
   /// Get complete transcript (all segments combined)
+  /// Uses single newlines between segments for natural flow
   String getCompleteTranscript() {
     return _segments
         .where((s) => s.status.toString().contains('completed'))
         .map((s) => s.text)
-        .join('\n\n');
+        .join('\n');
   }
 
   /// Alias for V2 compatibility
@@ -969,12 +1747,20 @@ class AutoPauseTranscriptionService {
     return sqrt(sumSquares / samples.length);
   }
 
+  /// Get complete transcript from streaming (confirmed segments)
+  /// Segments are joined with single newlines for natural paragraph flow
+  String getStreamingTranscript() {
+    return _confirmedSegments.join('\n');
+  }
+
   /// Cleanup
   Future<void> dispose() async {
     debugPrint('[AutoPauseTranscription] 🧹 Disposing service...');
 
-    // Stop health check
+    // Stop all timers
     _stopStreamHealthCheck();
+    _stopReTranscriptionLoop();
+    _stopRecordingDurationTimer();
 
     // Cancel audio stream subscription first
     await _audioStreamSubscription?.cancel();
@@ -985,6 +1771,7 @@ class AutoPauseTranscriptionService {
       try {
         await _recorder.stop();
         _isRecording = false;
+        _recordingStartTime = null;
         debugPrint(
           '[AutoPauseTranscription] Stopped active recording during dispose',
         );
@@ -1002,6 +1789,8 @@ class AutoPauseTranscriptionService {
     await _vadActivityController.close();
     await _debugMetricsController.close();
     await _streamHealthController.close();
+    await _streamingStateController.close();
+    await _interimTextController.close();
 
     // Clean up our temp files (but not the shared temp directory)
     if (_audioFilePath != null) {

@@ -7,7 +7,8 @@ import '../../capture/providers/capture_providers.dart';
 import '../../capture/screens/handwriting_screen.dart';
 import '../../recorder/providers/service_providers.dart';
 import '../../recorder/providers/transcription_progress_provider.dart';
-import '../../recorder/providers/transcription_init_provider.dart';
+import '../../recorder/providers/streaming_transcription_provider.dart';
+import '../../recorder/services/live_transcription_service_v3.dart';
 import '../../settings/screens/settings_screen.dart';
 
 /// Input bar for adding entries to the journal
@@ -48,11 +49,40 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
   Duration _recordingDuration = Duration.zero;
   Timer? _durationTimer;
 
+  // Streaming transcription state
+  final bool _useStreamingTranscription = true; // Enable by default
+  bool _isUsingStreamingMode = false; // Track which mode was actually started
+  StreamSubscription<StreamingTranscriptionState>? _streamingSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    // Trigger transcription model initialization in background
+    // so it's ready when user wants to record
+    _initializeTranscriptionModel();
+  }
+
+  /// Initialize transcription model in background so it's ready for recording
+  Future<void> _initializeTranscriptionModel() async {
+    try {
+      final transcriptionAdapter = ref.read(transcriptionServiceAdapterProvider);
+      final isReady = await transcriptionAdapter.isReady();
+      if (!isReady) {
+        debugPrint('[JournalInputBar] Triggering transcription model initialization...');
+        await transcriptionAdapter.initialize();
+        debugPrint('[JournalInputBar] Transcription model initialized');
+      }
+    } catch (e) {
+      debugPrint('[JournalInputBar] Failed to initialize transcription model: $e');
+    }
+  }
+
   @override
   void dispose() {
     _controller.dispose();
     _focusNode.dispose();
     _durationTimer?.cancel();
+    _streamingSubscription?.cancel();
     super.dispose();
   }
 
@@ -77,7 +107,72 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
   Future<void> _startRecording() async {
     if (_isRecording || widget.onVoiceRecorded == null) return;
 
-    // Recording works without transcription - we'll transcribe later if available
+    // Always use streaming mode - it handles "model initializing" gracefully
+    // and will start transcribing as soon as the model is ready
+    final transcriptionAdapter = ref.read(transcriptionServiceAdapterProvider);
+    final isModelReady = await transcriptionAdapter.isReady();
+
+    debugPrint('[JournalInputBar] Starting recording - streaming mode: $_useStreamingTranscription (model ready: $isModelReady)');
+
+    if (_useStreamingTranscription) {
+      // Use streaming transcription service (handles model init gracefully)
+      _isUsingStreamingMode = true;
+      await _startStreamingRecording();
+    } else {
+      // Only use standard recording if streaming is explicitly disabled
+      _isUsingStreamingMode = false;
+      await _startStandardRecording();
+    }
+  }
+
+  /// Start recording with streaming transcription (real-time feedback)
+  Future<void> _startStreamingRecording() async {
+    try {
+      final streamingNotifier = ref.read(streamingRecordingProvider.notifier);
+      final started = await streamingNotifier.startRecording();
+
+      if (!started) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not start recording. Check microphone permissions.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _isRecording = true;
+        _recordingDuration = Duration.zero;
+      });
+
+      // Start duration timer
+      _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (mounted && _isRecording && !_isPaused) {
+          setState(() {
+            _recordingDuration = _recordingDuration + const Duration(seconds: 1);
+          });
+        }
+      });
+
+      debugPrint('[JournalInputBar] Streaming recording started');
+    } catch (e) {
+      debugPrint('[JournalInputBar] Failed to start streaming recording: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to start recording: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Start standard recording (transcribe after recording ends)
+  Future<void> _startStandardRecording() async {
     final audioService = ref.read(audioServiceProvider);
 
     try {
@@ -110,7 +205,7 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
         }
       });
 
-      debugPrint('[JournalInputBar] Recording started');
+      debugPrint('[JournalInputBar] Standard recording started');
     } catch (e) {
       debugPrint('[JournalInputBar] Failed to start recording: $e');
       if (mounted) {
@@ -127,9 +222,16 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
   Future<void> _pauseRecording() async {
     if (!_isRecording || _isPaused) return;
 
-    final audioService = ref.read(audioServiceProvider);
     try {
-      await audioService.pauseRecording();
+      if (_isUsingStreamingMode) {
+        // Pause streaming recording
+        final service = await ref.read(autoPauseTranscriptionServiceProvider.future);
+        await service.pauseRecording();
+      } else {
+        // Pause standard recording
+        final audioService = ref.read(audioServiceProvider);
+        await audioService.pauseRecording();
+      }
       setState(() {
         _isPaused = true;
       });
@@ -142,9 +244,16 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
   Future<void> _resumeRecording() async {
     if (!_isRecording || !_isPaused) return;
 
-    final audioService = ref.read(audioServiceProvider);
     try {
-      await audioService.resumeRecording();
+      if (_isUsingStreamingMode) {
+        // Resume streaming recording
+        final service = await ref.read(autoPauseTranscriptionServiceProvider.future);
+        await service.resumeRecording();
+      } else {
+        // Resume standard recording
+        final audioService = ref.read(audioServiceProvider);
+        await audioService.resumeRecording();
+      }
       setState(() {
         _isPaused = false;
       });
@@ -160,13 +269,22 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
     _durationTimer?.cancel();
     _durationTimer = null;
 
-    final audioService = ref.read(audioServiceProvider);
-    await audioService.stopRecording();
+    debugPrint('[JournalInputBar] Discarding recording - streaming mode: $_isUsingStreamingMode');
+
+    // Use the mode we tracked when starting, not current init state
+    if (_isUsingStreamingMode) {
+      final streamingNotifier = ref.read(streamingRecordingProvider.notifier);
+      await streamingNotifier.cancelRecording();
+    } else {
+      final audioService = ref.read(audioServiceProvider);
+      await audioService.stopRecording();
+    }
 
     setState(() {
       _isRecording = false;
       _isPaused = false;
       _recordingDuration = Duration.zero;
+      _isUsingStreamingMode = false;
     });
 
     debugPrint('[JournalInputBar] Recording discarded');
@@ -178,6 +296,85 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
     _durationTimer?.cancel();
     _durationTimer = null;
 
+    debugPrint('[JournalInputBar] Stopping recording - streaming mode: $_isUsingStreamingMode');
+
+    // Use the mode we tracked when starting, not current init state
+    if (_isUsingStreamingMode) {
+      await _stopStreamingRecording();
+    } else {
+      await _stopStandardRecording();
+    }
+  }
+
+  /// Stop streaming recording and get the transcript that was built up during recording
+  Future<void> _stopStreamingRecording() async {
+    final durationSeconds = _recordingDuration.inSeconds;
+
+    setState(() {
+      _isRecording = false;
+      _isPaused = false;
+      _isProcessing = true;
+    });
+
+    try {
+      final streamingNotifier = ref.read(streamingRecordingProvider.notifier);
+
+      // Stop recording first - this flushes final audio and may add more text
+      final audioPath = await streamingNotifier.stopRecording();
+
+      // Get the transcript AFTER stopping - includes any text from final flush
+      final transcript = streamingNotifier.getStreamingTranscript();
+
+      if (audioPath == null) {
+        throw Exception('No audio file saved');
+      }
+
+      debugPrint('[JournalInputBar] Streaming recording stopped with transcript: ${transcript.length} chars');
+
+      // Create entry with the streaming transcript we already have
+      if (widget.onVoiceRecorded != null) {
+        await widget.onVoiceRecorded!(transcript, audioPath, durationSeconds);
+      }
+
+      // If we got a transcript, we're done - otherwise fall back to background transcription
+      if (transcript.isEmpty) {
+        debugPrint('[JournalInputBar] No streaming transcript - falling back to background transcription');
+        _transcribeInBackground(audioPath, durationSeconds);
+      } else {
+        // Clean up temp file since we have the transcript
+        try {
+          final tempFile = File(audioPath);
+          if (await tempFile.exists()) {
+            await tempFile.delete();
+            debugPrint('[JournalInputBar] Deleted temp audio file');
+          }
+        } catch (e) {
+          debugPrint('[JournalInputBar] Could not delete temp file: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('[JournalInputBar] Failed to process streaming recording: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save recording: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _recordingDuration = Duration.zero;
+          _isUsingStreamingMode = false;
+        });
+      }
+    }
+  }
+
+  /// Stop standard recording and transcribe in background
+  Future<void> _stopStandardRecording() async {
     final audioService = ref.read(audioServiceProvider);
     final durationSeconds = _recordingDuration.inSeconds;
 
@@ -232,10 +429,13 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
   /// If Parakeet is not ready, transcription is skipped silently.
   /// The recording is saved with audio only - user can transcribe later.
   Future<void> _transcribeInBackground(String audioPath, int durationSeconds) async {
-    // Check if transcription is available
-    final initState = ref.read(transcriptionInitProvider);
-    if (!initState.isReady) {
-      debugPrint('[JournalInputBar] Parakeet not ready - skipping transcription');
+    // Check if transcription is available using the actual adapter
+    // (transcriptionInitProvider may not reflect the true state if initialized elsewhere)
+    final transcriptionAdapter = ref.read(transcriptionServiceAdapterProvider);
+    final isReady = await transcriptionAdapter.isReady();
+
+    if (!isReady) {
+      debugPrint('[JournalInputBar] Transcription service not ready - skipping background transcription');
       // Don't delete the audio file - keep it for later transcription
       // The entry is already saved with the audio path
       return;
@@ -338,60 +538,68 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
     );
   }
 
-  /// Build the recording mode UI with timer and controls
+  /// Build the recording mode UI with timer, streaming transcript, and controls
   Widget _buildRecordingMode(bool isDark, ThemeData theme) {
+    // Watch streaming state for real-time updates
+    final streamingState = ref.watch(streamingTranscriptionProvider);
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Recording status and timer
+        // Recording header with status and timer
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
             color: _isPaused
                 ? BrandColors.warning.withValues(alpha: 0.1)
                 : BrandColors.error.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(12),
           ),
-          child: Column(
+          child: Row(
             children: [
-              // Status indicator
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_isPaused)
-                    Icon(Icons.pause, color: BrandColors.warning, size: 20)
-                  else
-                    Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: BrandColors.error,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _isPaused ? 'Paused' : 'Recording',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: _isPaused ? BrandColors.warning : BrandColors.error,
-                      fontWeight: FontWeight.w600,
-                    ),
+              // Recording indicator (pulsing dot or pause icon)
+              if (_isPaused)
+                Icon(Icons.pause, color: BrandColors.warning, size: 20)
+              else
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: BrandColors.error,
+                    shape: BoxShape.circle,
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // Timer
+                ),
+              const SizedBox(width: 12),
+
+              // Duration
               Text(
                 _formatDuration(_recordingDuration),
                 style: TextStyle(
-                  fontSize: 40,
-                  fontWeight: FontWeight.w300,
-                  color: isDark ? BrandColors.softWhite : BrandColors.ink,
+                  color: _isPaused ? BrandColors.warning : BrandColors.error,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
+
+              const Spacer(),
+
+              // VAD indicator - shows when speech is detected
+              streamingState.when(
+                data: (state) => _buildVadIndicator(state.vadLevel > 0.5, isDark),
+                loading: () => const SizedBox(width: 24, height: 24),
+                error: (e, st) => const SizedBox(width: 24, height: 24),
+              ),
             ],
           ),
+        ),
+        const SizedBox(height: 12),
+
+        // Streaming transcription display
+        streamingState.when(
+          data: (state) => _buildStreamingTranscript(state, isDark, theme),
+          loading: () => _buildTranscriptPlaceholder(isDark, TranscriptionModelStatus.initializing),
+          error: (e, st) => _buildTranscriptPlaceholder(isDark, TranscriptionModelStatus.error),
         ),
         const SizedBox(height: 12),
 
@@ -447,7 +655,7 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
                 child: ElevatedButton.icon(
                   onPressed: _stopRecording,
                   icon: const Icon(Icons.check, size: 20),
-                  label: const Text('Save'),
+                  label: const Text('Done'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: BrandColors.forest,
                     foregroundColor: BrandColors.softWhite,
@@ -461,6 +669,156 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar> {
           ],
         ),
       ],
+    );
+  }
+
+  /// Build VAD (Voice Activity Detection) indicator
+  Widget _buildVadIndicator(bool isSpeaking, bool isDark) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: isSpeaking
+            ? BrandColors.forest.withValues(alpha: 0.2)
+            : (isDark
+                ? BrandColors.charcoal.withValues(alpha: 0.5)
+                : BrandColors.stone.withValues(alpha: 0.5)),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: isSpeaking ? 14 : 10,
+          height: isSpeaking ? 14 : 10,
+          decoration: BoxDecoration(
+            color: isSpeaking ? BrandColors.forest : BrandColors.driftwood,
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Build the streaming transcript display
+  Widget _buildStreamingTranscript(
+    StreamingTranscriptionState state,
+    bool isDark,
+    ThemeData theme,
+  ) {
+    final hasConfirmed = state.confirmedSegments.isNotEmpty;
+    final hasInterim = state.interimText != null && state.interimText!.isNotEmpty;
+
+    if (!hasConfirmed && !hasInterim) {
+      return _buildTranscriptPlaceholder(isDark, state.modelStatus);
+    }
+
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 150),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? BrandColors.nightSurfaceElevated.withValues(alpha: 0.5)
+            : BrandColors.cream.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: SingleChildScrollView(
+        reverse: true, // Keep newest content visible
+        child: RichText(
+          text: TextSpan(
+            style: TextStyle(
+              color: isDark ? BrandColors.softWhite : BrandColors.ink,
+              fontSize: 15,
+              height: 1.5,
+            ),
+            children: [
+              // Confirmed segments (finalized text) - joined with spaces
+              if (hasConfirmed)
+                TextSpan(text: state.confirmedSegments.join(' ')),
+
+              // Interim text (currently being transcribed - shown in gray/italic)
+              if (hasInterim) ...[
+                if (hasConfirmed) const TextSpan(text: ' '),
+                TextSpan(
+                  text: state.interimText!,
+                  style: TextStyle(
+                    color: isDark
+                        ? BrandColors.driftwood
+                        : BrandColors.charcoal.withValues(alpha: 0.7),
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Build placeholder when no transcript is available yet
+  Widget _buildTranscriptPlaceholder(bool isDark, [TranscriptionModelStatus? modelStatus]) {
+    // Determine message based on model status
+    String message;
+    bool showProgress = true;
+    Color? iconColor;
+
+    switch (modelStatus) {
+      case TranscriptionModelStatus.initializing:
+        message = 'Initializing transcription model...';
+        iconColor = BrandColors.forest;
+        break;
+      case TranscriptionModelStatus.error:
+        message = 'Transcription unavailable';
+        showProgress = false;
+        iconColor = BrandColors.warning;
+        break;
+      case TranscriptionModelStatus.ready:
+      case TranscriptionModelStatus.notInitialized:
+      case null:
+        message = 'Listening...';
+        iconColor = BrandColors.driftwood;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? BrandColors.nightSurfaceElevated.withValues(alpha: 0.3)
+            : BrandColors.cream.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          if (showProgress)
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(iconColor ?? BrandColors.driftwood),
+              ),
+            )
+          else
+            Icon(
+              Icons.warning_amber_rounded,
+              size: 16,
+              color: iconColor,
+            ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: BrandColors.driftwood,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

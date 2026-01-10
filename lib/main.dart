@@ -12,6 +12,7 @@ import 'core/services/file_system_service.dart';
 import 'features/home/screens/home_screen.dart';
 import 'features/onboarding/screens/onboarding_flow.dart';
 import 'features/recorder/services/background_recording_service.dart';
+import 'features/recorder/services/transcription_service_adapter.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,6 +56,10 @@ void main() async {
   } catch (e, stackTrace) {
     log.error('Failed to initialize FlutterGemma', error: e, stackTrace: stackTrace);
   }
+
+  // Initialize transcription service (Parakeet) in background
+  // Don't await - let it initialize while app loads
+  _initializeTranscription(log);
 
   // Set up global error handling
   FlutterError.onError = (FlutterErrorDetails details) {
@@ -143,5 +148,40 @@ class _InitialScreenState extends State<_InitialScreen> {
     }
 
     return const HomeScreen();
+  }
+}
+
+/// Initialize transcription service in background
+/// This pre-loads the Parakeet model so it's ready when user starts recording
+void _initializeTranscription(dynamic log) async {
+  try {
+    log.info('Starting transcription model initialization...');
+    final transcriptionService = TranscriptionServiceAdapter();
+
+    // Set up progress callbacks for logging
+    TranscriptionServiceAdapter.setGlobalProgressCallbacks(
+      onProgress: (progress) {
+        debugPrint('[Main] Transcription init progress: ${(progress * 100).toInt()}%');
+      },
+      onStatus: (status) {
+        debugPrint('[Main] Transcription init status: $status');
+        log.debug('Transcription: $status');
+      },
+    );
+
+    await transcriptionService.initialize(
+      onProgress: (progress) {
+        debugPrint('[Main] Transcription init progress: ${(progress * 100).toInt()}%');
+      },
+      onStatus: (status) {
+        debugPrint('[Main] Transcription init: $status');
+      },
+    );
+
+    log.info('Transcription model initialized successfully');
+    debugPrint('[Main] ✅ Transcription model ready');
+  } catch (e, stackTrace) {
+    log.error('Failed to initialize transcription model', error: e, stackTrace: stackTrace);
+    debugPrint('[Main] ⚠️ Transcription init failed: $e');
   }
 }
