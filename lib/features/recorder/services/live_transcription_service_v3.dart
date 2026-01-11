@@ -158,8 +158,10 @@ enum TranscriptionModelStatus {
 }
 
 class StreamingTranscriptionState {
-  final List<String> confirmedSegments; // Finalized text segments
-  final String? interimText; // Currently being transcribed (may change)
+  final String confirmedText;   // Stable across 2+ iterations (locked, won't change)
+  final String tentativeText;   // Stable for 1 iteration (likely stable)
+  final String interimText;     // Current transcription suffix (may change)
+  final List<String> confirmedSegments; // For final transcript assembly
   final bool isRecording;
   final bool isProcessing;
   final Duration recordingDuration;
@@ -167,8 +169,10 @@ class StreamingTranscriptionState {
   final TranscriptionModelStatus modelStatus; // Track model initialization
 
   const StreamingTranscriptionState({
+    this.confirmedText = '',
+    this.tentativeText = '',
+    this.interimText = '',
     this.confirmedSegments = const [],
-    this.interimText,
     this.isRecording = false,
     this.isProcessing = false,
     this.recordingDuration = Duration.zero,
@@ -177,9 +181,10 @@ class StreamingTranscriptionState {
   });
 
   StreamingTranscriptionState copyWith({
-    List<String>? confirmedSegments,
+    String? confirmedText,
+    String? tentativeText,
     String? interimText,
-    bool? clearInterim,
+    List<String>? confirmedSegments,
     bool? isRecording,
     bool? isProcessing,
     Duration? recordingDuration,
@@ -187,8 +192,10 @@ class StreamingTranscriptionState {
     TranscriptionModelStatus? modelStatus,
   }) {
     return StreamingTranscriptionState(
+      confirmedText: confirmedText ?? this.confirmedText,
+      tentativeText: tentativeText ?? this.tentativeText,
+      interimText: interimText ?? this.interimText,
       confirmedSegments: confirmedSegments ?? this.confirmedSegments,
-      interimText: clearInterim == true ? null : (interimText ?? this.interimText),
       isRecording: isRecording ?? this.isRecording,
       isProcessing: isProcessing ?? this.isProcessing,
       recordingDuration: recordingDuration ?? this.recordingDuration,
@@ -197,14 +204,11 @@ class StreamingTranscriptionState {
     );
   }
 
-  /// Get all text (confirmed + interim) for display
-  /// Uses spaces between segments for natural flow
+  /// Get all text for display
+  /// Shows only confirmed/final text from VAD-detected segments.
+  /// No interim text during speech - simpler, no duplicates.
   String get displayText {
-    final confirmed = confirmedSegments.join(' ').trim();
-    if (interimText != null && interimText!.isNotEmpty) {
-      return confirmed.isEmpty ? interimText! : '$confirmed $interimText';
-    }
-    return confirmed;
+    return confirmedSegments.join(' ').trim();
   }
 }
 
@@ -245,19 +249,37 @@ class AutoPauseTranscriptionService {
   SmartChunker? _chunker;
   final List<List<int>> _allAudioSamples = []; // Buffer for pending samples
 
-  // === STREAMING TRANSCRIPTION (Phase 1) ===
-  // Rolling buffer for re-transcription (keeps last 30s of audio)
+  // === STREAMING TRANSCRIPTION WITH LOCAL AGREEMENT ===
+  //
+  // Architecture based on whisper_streaming's LocalAgreement-2 algorithm:
+  // 1. Maintain a rolling audio buffer (15-30 seconds)
+  // 2. Periodically transcribe the buffer (every 2 seconds)
+  // 3. Compare consecutive transcriptions to find stable text
+  // 4. Only "confirm" text that has been stable across 2 iterations
+  // 5. Display: [confirmed stable text] + [current interim]
+  //
+  // This avoids phrase-matching heuristics and instead relies on
+  // transcription stability as the signal for what's "real".
+
   List<int> _rollingAudioBuffer = [];
-  static const int _rollingBufferMaxSamples = 16000 * 30; // 30 seconds
-  static const int _reTranscriptionWindowSamples = 16000 * 15; // 15 seconds
-  static const Duration _reTranscriptionInterval = Duration(seconds: 3);
+  static const int _rollingBufferMaxSamples = 16000 * 30; // 30 seconds max
+  static const Duration _reTranscriptionInterval = Duration(seconds: 2); // Faster updates
 
   Timer? _reTranscriptionTimer;
   Timer? _recordingDurationTimer;
-  String _interimText = '';
   bool _isReTranscribing = false;
 
-  // Confirmed segments (finalized after silence detection)
+  // === LocalAgreement-2 State ===
+  // Track consecutive transcriptions to find stable prefixes
+  String? _previousTranscription; // Last transcription result
+  String _confirmedText = '';      // Text stable across 2+ iterations (locked)
+  String _tentativeText = '';      // Text stable for 1 iteration (likely stable)
+  String _interimText = '';        // Current transcription suffix (may change)
+
+  // Track when we last had a VAD pause to avoid re-transcribing stale audio
+  DateTime? _lastVadPauseTime;
+
+  // For final transcript assembly
   final List<String> _confirmedSegments = [];
 
   // Map from queued segment index to confirmed segment index
@@ -328,8 +350,10 @@ class AutoPauseTranscriptionService {
 
   /// Current streaming state snapshot
   StreamingTranscriptionState get currentStreamingState => StreamingTranscriptionState(
+    confirmedText: _confirmedText,
+    tentativeText: _tentativeText,
+    interimText: _interimText,
     confirmedSegments: List.unmodifiable(_confirmedSegments),
-    interimText: _interimText.isNotEmpty ? _interimText : null,
     isRecording: _isRecording,
     isProcessing: _isProcessingQueue,
     recordingDuration: _recordingStartTime != null
@@ -649,10 +673,14 @@ class AutoPauseTranscriptionService {
 
       // Reset streaming state
       _rollingAudioBuffer = [];
+      _previousTranscription = null;
+      _confirmedText = '';
+      _tentativeText = '';
       _interimText = '';
       _confirmedSegments.clear();
       _segmentToConfirmedIndex.clear();
       _segmentStartOffset = 0;
+      _lastVadPauseTime = null;
 
       // Set initial model status - check if already ready
       final isModelReady = await _transcriptionService.isReady();
@@ -669,8 +697,9 @@ class AutoPauseTranscriptionService {
       _lastAudioChunkTime = DateTime.now();
       _audioChunkCount = 0;
 
-      // Start re-transcription loop for streaming feedback
-      _startReTranscriptionLoop();
+      // NOTE: Re-transcription loop disabled - using richardtate VAD-only approach
+      // No interim text during speech, only final text after VAD pauses
+      // _startReTranscriptionLoop();
 
       // Start recording duration timer for UI updates
       _startRecordingDurationTimer();
@@ -1031,102 +1060,197 @@ class AutoPauseTranscriptionService {
     _recordingDurationTimer = null;
   }
 
-  /// Transcribe the rolling buffer for interim text display
+  /// Transcribe the rolling buffer and apply LocalAgreement-2
+  ///
+  /// LocalAgreement-2 algorithm:
+  /// 1. Transcribe current buffer
+  /// 2. Find longest common prefix with previous transcription
+  /// 3. If common prefix extends beyond tentative → promote to confirmed
+  /// 4. Current common prefix becomes tentative
+  /// 5. Everything after common prefix is interim (may change)
   Future<void> _transcribeRollingBuffer() async {
     if (_isReTranscribing) {
-      debugPrint('[AutoPauseTranscription] 🔄 Skipping - already re-transcribing');
-      return;
+      return; // Already processing
     }
-    if (_rollingAudioBuffer.isEmpty) {
-      debugPrint('[AutoPauseTranscription] 🔄 Skipping - buffer empty');
-      return;
-    }
-    if (_rollingAudioBuffer.length < 16000) {
-      debugPrint('[AutoPauseTranscription] 🔄 Skipping - buffer too small (${_rollingAudioBuffer.length} samples, need 16000)');
-      return;
+    if (_rollingAudioBuffer.isEmpty || _rollingAudioBuffer.length < 16000) {
+      return; // Not enough audio (need at least 1 second)
     }
 
     _isReTranscribing = true;
-    debugPrint('[AutoPauseTranscription] 🔄 Starting re-transcription...');
 
     try {
-      // Check if model is ready, if not show initializing status
+      // Check model status
       final isReady = await _transcriptionService.isReady();
       if (!isReady) {
         if (_modelStatus != TranscriptionModelStatus.initializing) {
-          debugPrint('[AutoPauseTranscription] 🔄 Model not ready, starting initialization...');
           _updateModelStatus(TranscriptionModelStatus.initializing);
         }
-        // Model will be initialized lazily by transcribeAudio
       }
 
-      // Take last 15 seconds (or whatever we have)
-      final samplesToTranscribe = _rollingAudioBuffer.length > _reTranscriptionWindowSamples
-          ? _rollingAudioBuffer.sublist(_rollingAudioBuffer.length - _reTranscriptionWindowSamples)
-          : List<int>.from(_rollingAudioBuffer);
-
+      // Transcribe full buffer
+      final samplesToTranscribe = List<int>.from(_rollingAudioBuffer);
       final durationSec = samplesToTranscribe.length / 16000;
-      debugPrint('[AutoPauseTranscription] 🔄 Re-transcribing ${durationSec.toStringAsFixed(1)}s of audio for interim text');
+      debugPrint('[LocalAgreement] Transcribing ${durationSec.toStringAsFixed(1)}s of audio');
 
-      // Save to temp file for transcription
       final fileSystem = FileSystemService();
-      final tempPath = await fileSystem.getTranscriptionSegmentPath(-1); // -1 for interim
+      final tempPath = await fileSystem.getTranscriptionSegmentPath(-1);
+      await _saveSamplesToWav(samplesToTranscribe, tempPath);
+
+      final result = await _transcriptionService.transcribeAudio(tempPath);
+
+      if (_modelStatus != TranscriptionModelStatus.ready) {
+        _updateModelStatus(TranscriptionModelStatus.ready);
+      }
+
+      try {
+        await File(tempPath).delete();
+      } catch (_) {}
+
+      final currentTranscription = result.text.trim();
+      if (currentTranscription.isEmpty) {
+        _previousTranscription = currentTranscription;
+        return;
+      }
+
+      // === LocalAgreement-2 Algorithm ===
+      _applyLocalAgreement(currentTranscription);
+
+      if (!_interimTextController.isClosed) {
+        _interimTextController.add(_interimText);
+      }
+      _emitStreamingState();
+
+      // Debug output
+      final display = '$_confirmedText $_tentativeText $_interimText'.trim();
+      if (display.isNotEmpty) {
+        final preview = display.length > 60 ? '${display.substring(0, 60)}...' : display;
+        debugPrint('[LocalAgreement] Display: "$preview"');
+        debugPrint('[LocalAgreement] Confirmed: ${_confirmedText.split(' ').length} words, '
+            'Tentative: ${_tentativeText.split(' ').length} words, '
+            'Interim: ${_interimText.split(' ').length} words');
+      }
+    } catch (e) {
+      debugPrint('[LocalAgreement] Transcription failed: $e');
+    } finally {
+      _isReTranscribing = false;
+    }
+  }
+
+  /// Final transcription for any remaining audio in rolling buffer
+  /// Simple: just transcribe what's there and add to confirmedSegments
+  Future<void> _doFinalTranscription() async {
+    if (_rollingAudioBuffer.isEmpty) return;
+
+    try {
+      debugPrint('[AutoPauseTranscription] Final transcription: ${_rollingAudioBuffer.length} samples');
+
+      final samplesToTranscribe = List<int>.from(_rollingAudioBuffer);
+
+      // Save to temp file
+      final fileSystem = FileSystemService();
+      final tempPath = await fileSystem.getTranscriptionSegmentPath(-999);
 
       await _saveSamplesToWav(samplesToTranscribe, tempPath);
 
-      // Transcribe (this will lazy-init the model if needed)
+      // Transcribe
       final result = await _transcriptionService.transcribeAudio(tempPath);
-
-      // If we just finished initializing, update status to ready
-      if (_modelStatus != TranscriptionModelStatus.ready) {
-        debugPrint('[AutoPauseTranscription] ✅ Model is now ready');
-        _updateModelStatus(TranscriptionModelStatus.ready);
-      }
 
       // Clean up temp file
       try {
         await File(tempPath).delete();
       } catch (_) {}
 
-      // Update interim text
-      String newInterimText = result.text.trim();
-
-      // Remove overlap with confirmed text using fuzzy matching
-      // Only strip from the END of confirmed (prefix of interim), not arbitrary matches
-      if (newInterimText.isNotEmpty && _confirmedSegments.isNotEmpty) {
-        final allConfirmed = _confirmedSegments.join(' ').trim();
-        newInterimText = _removeOverlapFuzzy(allConfirmed, newInterimText);
+      final transcribedText = result.text.trim();
+      if (transcribedText.isNotEmpty) {
+        _confirmedSegments.add(transcribedText);
+        debugPrint('[AutoPauseTranscription] Final segment: "$transcribedText"');
       }
 
-      if (newInterimText.isNotEmpty && newInterimText != _interimText) {
-        _interimText = newInterimText;
-
-        if (!_interimTextController.isClosed) {
-          _interimTextController.add(_interimText);
-        }
-
-        _emitStreamingState();
-
-        debugPrint('[AutoPauseTranscription] 📝 Interim text: "${_interimText.substring(0, min(50, _interimText.length))}..."');
-      } else if (newInterimText.isEmpty && _interimText.isNotEmpty) {
-        // Clear interim if nothing new after deduplication
-        _interimText = '';
-        if (!_interimTextController.isClosed) {
-          _interimTextController.add('');
-        }
-        _emitStreamingState();
-      }
+      _emitStreamingState();
     } catch (e) {
-      debugPrint('[AutoPauseTranscription] ⚠️ Re-transcription failed: $e');
-      // If transcription failed, update status to show error but keep trying
-      if (_modelStatus == TranscriptionModelStatus.initializing) {
-        // Model init might have failed - but don't give up, will retry next cycle
-        debugPrint('[AutoPauseTranscription] ⚠️ Transcription failed during init - will retry');
-      }
-    } finally {
-      _isReTranscribing = false;
-      debugPrint('[AutoPauseTranscription] 🔄 Re-transcription lock released');
+      debugPrint('[AutoPauseTranscription] Final transcription failed: $e');
     }
+  }
+
+  /// Apply LocalAgreement-2 algorithm to update confirmed/tentative/interim text
+  ///
+  /// SIMPLIFIED APPROACH: Since the rolling buffer produces the FULL transcription
+  /// of whatever audio is currently in it (up to 30 seconds), we should just display
+  /// that transcription directly. The buffer naturally slides forward as recording
+  /// continues, so the transcription is always current.
+  ///
+  /// We use LocalAgreement only to determine visual styling (confirmed vs tentative),
+  /// NOT to accumulate text across transcriptions.
+  void _applyLocalAgreement(String currentTranscription) {
+    if (_previousTranscription == null) {
+      // First transcription - everything is interim (may change)
+      _confirmedText = '';
+      _tentativeText = '';
+      _interimText = currentTranscription;
+      _previousTranscription = currentTranscription;
+      return;
+    }
+
+    // Find longest common prefix between previous and current transcription
+    final commonPrefix = _longestCommonWordPrefix(_previousTranscription!, currentTranscription);
+    final commonPrefixWords = commonPrefix.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    final currentWords = currentTranscription.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+
+    debugPrint('[LocalAgreement] Common prefix: $commonPrefixWords words, Current: $currentWords words');
+
+    // The common prefix is stable (appeared in both previous and current transcription)
+    // Everything after it in current transcription is still changing
+    _confirmedText = '';  // We don't accumulate - buffer already has full audio
+    _tentativeText = commonPrefix;  // Stable across 2 iterations
+
+    if (commonPrefix.length < currentTranscription.length) {
+      _interimText = currentTranscription.substring(commonPrefix.length).trim();
+    } else {
+      _interimText = '';
+    }
+
+    _previousTranscription = currentTranscription;
+  }
+
+  /// Normalize text for duplicate comparison
+  String _normalizeForComparison(String text) {
+    return text.toLowerCase().replaceAll(RegExp(r'[^\w\s]'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  /// Find the longest common prefix between two strings, word-by-word
+  String _longestCommonWordPrefix(String a, String b) {
+    final wordsA = a.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final wordsB = b.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+
+    int matchLen = 0;
+    for (int i = 0; i < min(wordsA.length, wordsB.length); i++) {
+      if (_wordsMatchFuzzy(wordsA[i], wordsB[i])) {
+        matchLen = i + 1;
+      } else {
+        break;
+      }
+    }
+
+    return wordsA.take(matchLen).join(' ');
+  }
+
+  /// Check if two words match (case-insensitive, ignoring punctuation)
+  bool _wordsMatchFuzzy(String a, String b) {
+    String normalize(String s) => s
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\w]'), '');
+
+    final normA = normalize(a);
+    final normB = normalize(b);
+
+    if (normA == normB) return true;
+
+    // Allow small differences (Levenshtein distance <= 1)
+    if (normA.length > 2 && normB.length > 2) {
+      return _levenshteinDistance(normA, normB) <= 1;
+    }
+
+    return false;
   }
 
   /// Emit current streaming state to UI
@@ -1134,8 +1258,10 @@ class AutoPauseTranscriptionService {
     if (_streamingStateController.isClosed) return;
 
     final state = StreamingTranscriptionState(
+      confirmedText: _confirmedText,
+      tentativeText: _tentativeText,
+      interimText: _interimText,
       confirmedSegments: List.unmodifiable(_confirmedSegments),
-      interimText: _interimText.isNotEmpty ? _interimText : null,
       isRecording: _isRecording,
       isProcessing: _isProcessingQueue,
       recordingDuration: _recordingStartTime != null
@@ -1159,8 +1285,12 @@ class AutoPauseTranscriptionService {
   String _removeOverlapFuzzy(String confirmed, String interim) {
     if (confirmed.isEmpty || interim.isEmpty) return interim;
 
-    // Normalize for comparison (lowercase, collapse whitespace)
-    String normalize(String s) => s.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+    // Normalize for comparison (lowercase, strip punctuation, collapse whitespace)
+    String normalize(String s) => s
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\w\s]'), '') // Remove punctuation
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
 
     final confirmedNorm = normalize(confirmed);
     final interimNorm = normalize(interim);
@@ -1173,8 +1303,10 @@ class AutoPauseTranscriptionService {
 
     // Case 2: Find longest suffix of confirmed that matches prefix of interim
     // Use word-based matching for fuzziness
-    final confirmedWords = confirmedNorm.split(' ');
-    final interimWords = interimNorm.split(' ');
+    final confirmedWords = confirmedNorm.split(' ').where((w) => w.isNotEmpty).toList();
+    final interimWords = interimNorm.split(' ').where((w) => w.isNotEmpty).toList();
+
+    if (confirmedWords.isEmpty || interimWords.isEmpty) return interim;
 
     // Try matching last N words of confirmed with first N words of interim
     int bestMatchWords = 0;
@@ -1183,7 +1315,7 @@ class AutoPauseTranscriptionService {
       final interimPrefix = interimWords.sublist(0, n);
 
       // Check if they match (with some tolerance for minor differences)
-      if (_wordsMatchFuzzy(confirmedSuffix, interimPrefix)) {
+      if (_wordListsMatchFuzzy(confirmedSuffix, interimPrefix)) {
         bestMatchWords = n;
         break;
       }
@@ -1191,6 +1323,7 @@ class AutoPauseTranscriptionService {
 
     if (bestMatchWords > 0) {
       // Remove the first bestMatchWords words from interim
+      // But we need to work with the original words (with punctuation)
       final interimWordsList = interim.split(RegExp(r'\s+'));
       if (bestMatchWords < interimWordsList.length) {
         return interimWordsList.sublist(bestMatchWords).join(' ').trim();
@@ -1204,7 +1337,7 @@ class AutoPauseTranscriptionService {
   }
 
   /// Check if two word lists match with fuzzy tolerance
-  bool _wordsMatchFuzzy(List<String> a, List<String> b) {
+  bool _wordListsMatchFuzzy(List<String> a, List<String> b) {
     if (a.length != b.length) return false;
 
     int matches = 0;
@@ -1261,51 +1394,30 @@ class AutoPauseTranscriptionService {
     return pos < interim.length ? interim.substring(pos).trim() : '';
   }
 
-  /// Handle chunk ready from SmartChunker
+  /// Handle chunk ready from SmartChunker (VAD detected pause)
+  ///
+  /// Richardtate approach: On VAD pause, transcribe ONLY the chunk audio,
+  /// add result to confirmedSegments, then clear the rolling buffer.
+  /// This avoids duplicates by never re-transcribing overlapping audio.
   void _handleChunk(List<int> samples) {
     final duration = Duration(
       milliseconds: (samples.length / 16).round(),
     ); // 16 samples/ms at 16kHz
 
     debugPrint(
-      '[AutoPauseTranscription] 🎤 Auto-chunk detected! '
+      '[StreamingTranscription] VAD pause detected! '
       'Duration: ${duration.inSeconds}s (${samples.length} samples)',
     );
 
-    // Move current interim text to confirmed (if any)
-    // This provides immediate feedback while waiting for final transcription
-    final confirmedIdx = _confirmedSegments.length; // Index where we'll add this segment
-    if (_interimText.isNotEmpty) {
-      _confirmedSegments.add(_interimText);
-      _interimText = '';
-
-      if (!_interimTextController.isClosed) {
-        _interimTextController.add('');
-      }
-
-      _emitStreamingState();
-      debugPrint('[AutoPauseTranscription] ✅ Interim text moved to confirmed at index $confirmedIdx');
-    } else {
-      // Even if no interim text, add placeholder for this segment
-      _confirmedSegments.add('');
-      debugPrint('[AutoPauseTranscription] Added placeholder confirmed segment at index $confirmedIdx');
-    }
-
-    // Keep 5 second overlap in rolling buffer for context continuity
-    const overlapSamples = 16000 * 5;
-    if (_rollingAudioBuffer.length > overlapSamples) {
-      _rollingAudioBuffer = _rollingAudioBuffer.sublist(
-        _rollingAudioBuffer.length - overlapSamples,
-      );
-    } else {
-      _rollingAudioBuffer.clear();
-    }
-
-    // Queue for transcription (this will get the "official" transcription)
-    // Track the mapping so we update the correct confirmed segment later
-    final segmentIndex = _nextSegmentIndex; // This will be the segment index used
-    _segmentToConfirmedIndex[segmentIndex] = confirmedIdx;
+    // Queue chunk for transcription - this will add to confirmedSegments
     _queueSegmentForProcessing(samples);
+
+    // Clear rolling buffer state - we're done with this audio
+    _rollingAudioBuffer.clear();
+    _previousTranscription = null;
+    _confirmedText = '';
+    _tentativeText = '';
+    _interimText = '';
 
     // Update segment start offset for next segment
     _segmentStartOffset = _totalSamplesWritten * 2; // Bytes
@@ -1356,45 +1468,27 @@ class AutoPauseTranscriptionService {
       await _recorder.stop();
       _isRecording = false;
 
-      // Wait a moment for any final audio chunks to be processed by the stream
-      // The audio stream may still have buffered data that hasn't been delivered yet
-      debugPrint('[AutoPauseTranscription] Waiting for stream to settle...');
+      // Wait for stream to settle
       await Future.delayed(const Duration(milliseconds: 300));
 
-      // === PARAKEET FINAL FLUSH ===
-      // Parakeet's internal buffers need silence to flush the final word(s)
-      // Without this, the last 1-2 words are often lost
-      debugPrint('[AutoPauseTranscription] 🔊 Flushing Parakeet with silence...');
-      final silenceBuffer = List<int>.filled(16000 * 2, 0); // 2 seconds of silence
-      _rollingAudioBuffer.addAll(silenceBuffer);
-
-      // Do one final re-transcription with the silence-padded buffer
-      // This captures any final words that Parakeet was holding
-      if (_rollingAudioBuffer.length > 16000) {
-        await _transcribeRollingBuffer();
-
-        // If we got interim text from the flush, move it to confirmed
-        if (_interimText.isNotEmpty) {
-          _confirmedSegments.add(_interimText);
-          _interimText = '';
-          debugPrint('[AutoPauseTranscription] ✅ Final flush text moved to confirmed');
-        }
+      // Flush chunker FIRST - this triggers _handleChunk for any remaining audio
+      // The chunker holds audio that hasn't hit a VAD pause yet
+      if (_chunker != null) {
+        debugPrint('[AutoPauseTranscription] Flushing chunker for final audio...');
+        _chunker!.flush();
+        _chunker = null;
       }
 
-      debugPrint(
-        '[AutoPauseTranscription] Stream settled, flushing final chunk...',
-      );
+      // Wait for any queued segments to finish processing
+      while (_isProcessingQueue) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
 
-      // Flush final chunk from SmartChunker
-      if (_chunker != null) {
-        _chunker!.flush();
-        // CRITICAL: flush() wraps callback in Future.microtask(), so we must
-        // wait for the microtask queue to run before returning
-        await Future.delayed(const Duration(milliseconds: 50));
-        debugPrint(
-          '[AutoPauseTranscription] Chunker flushed and callback queued',
-        );
-        _chunker = null;
+      // If there's still audio in rolling buffer (after VAD flush), transcribe it
+      // This catches edge cases where flush didn't produce a chunk
+      if (_rollingAudioBuffer.length > 8000) { // At least 0.5s of audio
+        debugPrint('[AutoPauseTranscription] Transcribing remaining buffer: ${_rollingAudioBuffer.length} samples');
+        await _doFinalTranscription();
       }
 
       // Reset noise filter for next recording
@@ -1483,6 +1577,9 @@ class AutoPauseTranscriptionService {
       _allAudioSamples.clear();
       _processingQueue.clear();
       _rollingAudioBuffer.clear();
+      _previousTranscription = null;
+      _confirmedText = '';
+      _tentativeText = '';
       _interimText = '';
       _confirmedSegments.clear();
 
@@ -1674,18 +1771,10 @@ class AutoPauseTranscriptionService {
           _segmentStreamController.add(_segments[segmentIndex]);
         }
 
-        // Update confirmed segments for streaming UI
-        // Use the mapping to update the correct confirmed segment
-        final confirmedIdx = _segmentToConfirmedIndex[segment.index];
-        if (confirmedIdx != null && confirmedIdx < _confirmedSegments.length) {
-          _confirmedSegments[confirmedIdx] = transcribedText;
-          debugPrint('[AutoPauseTranscription] Updated confirmed segment $confirmedIdx with official transcription');
-        } else {
-          // Fallback: add as new segment if mapping is missing
-          _confirmedSegments.add(transcribedText);
-          debugPrint('[AutoPauseTranscription] Added new confirmed segment (mapping missing for segment ${segment.index})');
-        }
+        // Simply add to confirmed segments - no overlap since each chunk is unique audio
+        _confirmedSegments.add(transcribedText);
         _emitStreamingState();
+        debugPrint('[StreamingTranscription] Segment ${segment.index}: "$transcribedText"');
 
         // Update persistence
         await _updatePersistedSegmentStatus(
