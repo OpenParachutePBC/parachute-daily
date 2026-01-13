@@ -38,9 +38,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         unselectedItemColor: isDark ? BrandColors.nightTextSecondary : BrandColors.driftwood,
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.book_outlined),
-            activeIcon: Icon(Icons.book),
-            label: 'Journal',
+            icon: Icon(Icons.wb_sunny_outlined),
+            activeIcon: Icon(Icons.wb_sunny),
+            label: 'Daily',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.search_outlined),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:parachute_daily/core/theme/design_tokens.dart';
 import '../widgets/storage_section.dart';
+import '../widgets/server_section.dart';
 import '../widgets/local_ai_models_section.dart';
 import '../widgets/omi_device_section.dart';
 
@@ -30,6 +31,8 @@ class SettingsScreen extends ConsumerWidget {
         padding: const EdgeInsets.all(16),
         children: const [
           StorageSection(),
+          SizedBox(height: 24),
+          ServerSection(),
           SizedBox(height: 24),
           LocalAiModelsSection(),
           SizedBox(height: 24),

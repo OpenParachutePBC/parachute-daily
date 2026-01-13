@@ -1,10 +1,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/file_system_provider.dart';
+import '../models/chat_log.dart';
 import '../models/journal_day.dart';
 import '../models/journal_entry.dart';
+import '../models/reflection.dart';
+import '../services/chat_log_service.dart';
 import '../services/para_id_service.dart';
 import '../services/journal_service.dart';
+import '../services/reflection_service.dart';
 
 /// Async provider that properly initializes the journal service
 ///
@@ -64,6 +68,46 @@ final journalDatesProvider = FutureProvider<List<DateTime>>((ref) async {
 
   final journalService = await ref.watch(journalServiceFutureProvider.future);
   return journalService.listJournalDates();
+});
+
+// ============================================================================
+// Chat Log Providers
+// ============================================================================
+
+/// Async provider for ChatLogService
+final chatLogServiceFutureProvider = FutureProvider<ChatLogService>((ref) async {
+  final fileSystemService = ref.watch(fileSystemServiceProvider);
+  await fileSystemService.initialize();
+  return ChatLogService.create(fileSystemService: fileSystemService);
+});
+
+/// Provider for the selected date's chat log
+final selectedChatLogProvider = FutureProvider<ChatLog?>((ref) async {
+  final date = ref.watch(selectedJournalDateProvider);
+  ref.watch(journalRefreshTriggerProvider);
+
+  final chatLogService = await ref.watch(chatLogServiceFutureProvider.future);
+  return chatLogService.loadChatLog(date);
+});
+
+// ============================================================================
+// Reflection Providers
+// ============================================================================
+
+/// Async provider for ReflectionService
+final reflectionServiceFutureProvider = FutureProvider<ReflectionService>((ref) async {
+  final fileSystemService = ref.watch(fileSystemServiceProvider);
+  await fileSystemService.initialize();
+  return ReflectionService.create(fileSystemService: fileSystemService);
+});
+
+/// Provider for the selected date's reflection (morning reflection for that day)
+final selectedReflectionProvider = FutureProvider<Reflection?>((ref) async {
+  final date = ref.watch(selectedJournalDateProvider);
+  ref.watch(journalRefreshTriggerProvider);
+
+  final reflectionService = await ref.watch(reflectionServiceFutureProvider.future);
+  return reflectionService.loadReflection(date);
 });
 
 /// State notifier for managing journal entry operations

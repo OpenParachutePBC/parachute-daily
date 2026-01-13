@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/services/file_system_service.dart';
+import '../../../core/providers/base_server_provider.dart';
 import '../../../core/providers/file_system_provider.dart';
 import '../../../core/providers/vision_provider.dart';
 import '../../recorder/providers/service_providers.dart';
@@ -13,9 +14,12 @@ import '../../recorder/widgets/playback_controls.dart';
 import '../models/journal_day.dart';
 import '../models/journal_entry.dart';
 import '../providers/journal_providers.dart';
+import '../widgets/chat_log_section.dart';
+import '../widgets/curator_trigger_card.dart';
 import '../widgets/journal_entry_row.dart';
 import '../widgets/journal_input_bar.dart';
 import '../widgets/mini_audio_player.dart';
+import '../widgets/morning_reflection_header.dart';
 import '../../settings/screens/settings_screen.dart';
 
 /// Main journal screen showing today's journal entries
@@ -758,6 +762,10 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
         selectedDate.day == now.day;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
+    // Watch reflection and chat log for the selected date
+    final reflectionAsync = ref.watch(selectedReflectionProvider);
+    final chatLogAsync = ref.watch(selectedChatLogProvider);
+
     // Handle scroll to bottom after new entry is added
     if (_shouldScrollToBottom) {
       _shouldScrollToBottom = false;
@@ -766,7 +774,13 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
       });
     }
 
-    if (journal.isEmpty) {
+    // Check if we have any content at all
+    final hasJournalEntries = journal.entries.isNotEmpty;
+    final hasReflection = reflectionAsync.valueOrNull?.hasContent ?? false;
+    final hasChatLog = chatLogAsync.valueOrNull?.hasContent ?? false;
+    final hasAnyContent = hasJournalEntries || hasReflection || hasChatLog;
+
+    if (!hasAnyContent) {
       // Wrap empty state in RefreshIndicator with scrollable child
       // so pull-to-refresh works even when there are no entries
       return RefreshIndicator(
@@ -794,52 +808,115 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
             _saveCurrentEdit();
           }
         },
-        child: ListView.builder(
+        child: CustomScrollView(
           controller: _scrollController,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: journal.entries.length,
-          itemBuilder: (context, index) {
-            final entry = journal.entries[index];
-            final isEditing = _editingEntryId == entry.id;
-
-            return Column(
-              children: [
-                // Subtle divider between entries (except first)
-                if (index > 0)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Divider(
-                      height: 1,
-                      thickness: 0.5,
-                      color: isDark
-                          ? BrandColors.charcoal.withValues(alpha: 0.3)
-                          : BrandColors.stone.withValues(alpha: 0.3),
-                    ),
-                  ),
-
-                JournalEntryRow(
-                  entry: entry,
-                  audioPath: journal.getAudioPath(entry.id),
-                  isEditing: isEditing,
-                  // Show transcribing for both manual transcribe and background transcription
-                  isTranscribing: _transcribingEntryIds.contains(entry.id) ||
-                      _pendingTranscriptionEntryId == entry.id,
-                  transcriptionProgress: _transcriptionProgress[entry.id] ?? 0.0,
-                  isEnhancing: _enhancingEntryIds.contains(entry.id),
-                  enhancementProgress: _enhancementProgress[entry.id],
-                  enhancementStatus: _enhancementStatus[entry.id],
-                  onTap: () => _handleEntryTap(entry),
-                  onLongPress: () => _showEntryActions(context, journal, entry),
-                  onPlayAudio: (path) => _playAudio(path, entryTitle: entry.title),
-                  onTranscribe: () => _handleTranscribe(entry, journal),
-                  onEnhance: () => _handleEnhance(entry),
-                  onContentChanged: (content) => _handleContentChanged(entry.id, content),
-                  onTitleChanged: (title) => _handleTitleChanged(entry.id, title),
-                  onEditingComplete: _saveCurrentEdit,
+          slivers: [
+            // Morning Reflection (if available)
+            // Note: Reflections sync naturally via file system, no need to show
+            // a trigger card when there's no reflection yet
+            if (hasReflection)
+              SliverToBoxAdapter(
+                child: MorningReflectionHeader(
+                  reflection: reflectionAsync.value!,
+                  initiallyExpanded: false,
                 ),
-              ],
-            );
-          },
+              ),
+
+            // Journal section header (if there are entries)
+            if (hasJournalEntries && (hasReflection || hasChatLog))
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.book_outlined,
+                        size: 18,
+                        color: BrandColors.forest,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Journal',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: isDark ? BrandColors.driftwood : BrandColors.charcoal,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${journal.entries.length} entr${journal.entries.length == 1 ? 'y' : 'ies'}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: BrandColors.driftwood,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Journal entries
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final entry = journal.entries[index];
+                    final isEditing = _editingEntryId == entry.id;
+
+                    return Column(
+                      children: [
+                        // Subtle divider between entries (except first)
+                        if (index > 0)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Divider(
+                              height: 1,
+                              thickness: 0.5,
+                              color: isDark
+                                  ? BrandColors.charcoal.withValues(alpha: 0.3)
+                                  : BrandColors.stone.withValues(alpha: 0.3),
+                            ),
+                          ),
+
+                        JournalEntryRow(
+                          entry: entry,
+                          audioPath: journal.getAudioPath(entry.id),
+                          isEditing: isEditing,
+                          // Show transcribing for both manual transcribe and background transcription
+                          isTranscribing: _transcribingEntryIds.contains(entry.id) ||
+                              _pendingTranscriptionEntryId == entry.id,
+                          transcriptionProgress: _transcriptionProgress[entry.id] ?? 0.0,
+                          isEnhancing: _enhancingEntryIds.contains(entry.id),
+                          enhancementProgress: _enhancementProgress[entry.id],
+                          enhancementStatus: _enhancementStatus[entry.id],
+                          onTap: () => _handleEntryTap(entry),
+                          onLongPress: () => _showEntryActions(context, journal, entry),
+                          onPlayAudio: (path) => _playAudio(path, entryTitle: entry.title),
+                          onTranscribe: () => _handleTranscribe(entry, journal),
+                          onEnhance: () => _handleEnhance(entry),
+                          onContentChanged: (content) => _handleContentChanged(entry.id, content),
+                          onTitleChanged: (title) => _handleTitleChanged(entry.id, title),
+                          onEditingComplete: _saveCurrentEdit,
+                        ),
+                      ],
+                    );
+                  },
+                  childCount: journal.entries.length,
+                ),
+              ),
+            ),
+
+            // Chat Log section (if available)
+            if (hasChatLog)
+              SliverToBoxAdapter(
+                child: ChatLogSection(
+                  chatLog: chatLogAsync.value!,
+                ),
+              ),
+
+            // Bottom padding
+            const SliverPadding(padding: EdgeInsets.only(bottom: 16)),
+          ],
         ),
       ),
     );

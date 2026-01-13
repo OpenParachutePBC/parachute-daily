@@ -23,6 +23,8 @@ class _StorageSectionState extends ConsumerState<StorageSection> {
   String _currentPath = '';
   final TextEditingController _journalsFolderController = TextEditingController();
   final TextEditingController _assetsFolderController = TextEditingController();
+  final TextEditingController _reflectionsFolderController = TextEditingController();
+  final TextEditingController _chatLogFolderController = TextEditingController();
   bool _isLoading = true;
 
   @override
@@ -35,6 +37,8 @@ class _StorageSectionState extends ConsumerState<StorageSection> {
   void dispose() {
     _journalsFolderController.dispose();
     _assetsFolderController.dispose();
+    _reflectionsFolderController.dispose();
+    _chatLogFolderController.dispose();
     super.dispose();
   }
 
@@ -47,11 +51,15 @@ class _StorageSectionState extends ConsumerState<StorageSection> {
       final path = await fileSystemService.getRootPathDisplay();
       final journalsName = fileSystemService.getJournalFolderName();
       final assetsName = fileSystemService.getAssetsFolderName();
+      final reflectionsName = fileSystemService.getReflectionsFolderName();
+      final chatLogName = fileSystemService.getChatLogFolderName();
 
       setState(() {
         _currentPath = path;
         _journalsFolderController.text = journalsName;
         _assetsFolderController.text = assetsName;
+        _reflectionsFolderController.text = reflectionsName;
+        _chatLogFolderController.text = chatLogName;
         _isLoading = false;
       });
     } catch (e) {
@@ -120,6 +128,8 @@ class _StorageSectionState extends ConsumerState<StorageSection> {
     final success = await fileSystemService.setSubfolderNames(
       journalsFolderName: _journalsFolderController.text,
       assetsFolderName: _assetsFolderController.text,
+      reflectionsFolderName: _reflectionsFolderController.text,
+      chatLogFolderName: _chatLogFolderController.text,
     );
 
     if (mounted) {
@@ -129,6 +139,68 @@ class _StorageSectionState extends ConsumerState<StorageSection> {
         ),
       );
     }
+  }
+
+  Widget _buildSubfolderRow(
+    BuildContext context, {
+    required String label,
+    required TextEditingController controller,
+    required String hintText,
+    required bool isDark,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? BrandColors.nightText : BrandColors.charcoal,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                hintText: hintText,
+                hintStyle: TextStyle(
+                  color: isDark
+                      ? BrandColors.nightTextSecondary.withValues(alpha: 0.5)
+                      : BrandColors.driftwood.withValues(alpha: 0.5),
+                ),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(
+                    color: isDark ? BrandColors.nightSurfaceElevated : BrandColors.stone,
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(
+                    color: isDark ? BrandColors.nightSurfaceElevated : BrandColors.stone,
+                  ),
+                ),
+              ),
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? BrandColors.nightText : BrandColors.charcoal,
+              ),
+              onSubmitted: (_) => _updateSubfolderNames(),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -262,60 +334,37 @@ class _StorageSectionState extends ConsumerState<StorageSection> {
               ),
 
               // Assets subfolder
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        'Assets subfolder',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: isDark ? BrandColors.nightText : BrandColors.charcoal,
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      flex: 3,
-                      child: TextField(
-                        controller: _assetsFolderController,
-                        decoration: InputDecoration(
-                          hintText: 'assets',
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(
-                              color: isDark ? BrandColors.nightSurfaceElevated : BrandColors.stone,
-                            ),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(
-                              color: isDark ? BrandColors.nightSurfaceElevated : BrandColors.stone,
-                            ),
-                          ),
-                        ),
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: isDark ? BrandColors.nightText : BrandColors.charcoal,
-                        ),
-                        onSubmitted: (_) => _updateSubfolderNames(),
-                      ),
-                    ),
-                  ],
-                ),
+              _buildSubfolderRow(
+                context,
+                label: 'Assets subfolder',
+                controller: _assetsFolderController,
+                hintText: 'assets',
+                isDark: isDark,
+              ),
+
+              // Reflections subfolder
+              _buildSubfolderRow(
+                context,
+                label: 'Reflections subfolder',
+                controller: _reflectionsFolderController,
+                hintText: 'reflections',
+                isDark: isDark,
+              ),
+
+              // Chat log subfolder
+              _buildSubfolderRow(
+                context,
+                label: 'Chat log subfolder',
+                controller: _chatLogFolderController,
+                hintText: 'chat-log',
+                isDark: isDark,
               ),
 
               // Helper text
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 child: Text(
-                  'Leave journals blank to store directly in Daily folder. Assets stores audio and images.',
+                  'Configure where Daily stores journals, assets, AI reflections, and chat logs.',
                   style: TextStyle(
                     fontSize: 12,
                     color: isDark

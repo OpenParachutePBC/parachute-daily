@@ -9,7 +9,7 @@ class SimpleSearchResult {
   /// Type of content: 'journal'
   final String type;
 
-  /// Title or identifier for display
+  /// Title or identifier for display (e.g., "10:30 AM" for journal entries)
   final String title;
 
   /// The matching text snippet
@@ -24,6 +24,12 @@ class SimpleSearchResult {
   /// Number of keyword matches
   final int matchCount;
 
+  /// Entry type indicator (voice, text, photo, etc.)
+  final String? entryType;
+
+  /// Similarity score for semantic search (0.0 to 1.0)
+  final double? similarityScore;
+
   SimpleSearchResult({
     required this.id,
     required this.type,
@@ -32,7 +38,16 @@ class SimpleSearchResult {
     required this.fullContent,
     required this.date,
     required this.matchCount,
+    this.entryType,
+    this.similarityScore,
   });
+
+  /// Format date for display (e.g., "Jan 10, 2025")
+  String get formattedDate {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  }
 }
 
 /// Simple text search service using keyword matching
@@ -130,11 +145,12 @@ class SimpleTextSearchService {
               results.add(SimpleSearchResult(
                 id: 'journal:$dateStr:${entry.id}',
                 type: 'journal',
-                title: 'Journal $dateStr',
+                title: entry.title.isNotEmpty ? entry.title : 'Entry',
                 snippet: snippet,
                 fullContent: entry.content,
                 date: date,
                 matchCount: matchCount,
+                entryType: entry.type.name,
               ));
             }
           }

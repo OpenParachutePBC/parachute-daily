@@ -246,17 +246,19 @@ class _SearchResultCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header row
+              // Header row with time and date
               Row(
                 children: [
+                  // Entry type icon
                   Icon(
-                    Icons.book_outlined,
+                    _getEntryTypeIcon(result.entryType),
                     size: 16,
                     color: isDark
-                        ? BrandColors.nightTextSecondary
-                        : BrandColors.driftwood,
+                        ? BrandColors.nightTurquoise
+                        : BrandColors.turquoise,
                   ),
                   const SizedBox(width: 8),
+                  // Time (from entry title, e.g., "10:30 AM")
                   Text(
                     result.title,
                     style: TextStyle(
@@ -267,28 +269,63 @@ class _SearchResultCard extends StatelessWidget {
                           : BrandColors.charcoal,
                     ),
                   ),
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
+                  const SizedBox(width: 8),
+                  // Date
+                  Text(
+                    result.formattedDate,
+                    style: TextStyle(
+                      fontSize: 13,
                       color: isDark
-                          ? BrandColors.nightTurquoise.withValues(alpha: 0.2)
-                          : BrandColors.success.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      '${result.matchCount} match${result.matchCount > 1 ? 'es' : ''}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark
-                            ? BrandColors.nightTurquoise
-                            : BrandColors.success,
-                      ),
+                          ? BrandColors.nightTextSecondary
+                          : BrandColors.driftwood,
                     ),
                   ),
+                  const Spacer(),
+                  // Match count or similarity score
+                  if (result.similarityScore != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? BrandColors.nightForest.withValues(alpha: 0.2)
+                            : BrandColors.forest.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${(result.similarityScore! * 100).toInt()}% match',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark
+                              ? BrandColors.nightForest
+                              : BrandColors.forest,
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? BrandColors.nightTurquoise.withValues(alpha: 0.2)
+                            : BrandColors.success.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${result.matchCount} match${result.matchCount > 1 ? 'es' : ''}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark
+                              ? BrandColors.nightTurquoise
+                              : BrandColors.success,
+                        ),
+                      ),
+                    ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -303,6 +340,24 @@ class _SearchResultCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Get icon for entry type
+  IconData _getEntryTypeIcon(String? entryType) {
+    switch (entryType) {
+      case 'voice':
+        return Icons.mic;
+      case 'text':
+        return Icons.edit_note;
+      case 'photo':
+        return Icons.photo_camera;
+      case 'handwriting':
+        return Icons.draw;
+      case 'linked':
+        return Icons.link;
+      default:
+        return Icons.article;
+    }
   }
 }
 

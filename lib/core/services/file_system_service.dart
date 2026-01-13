@@ -24,12 +24,16 @@ class FileSystemService {
   static const String _rootFolderPathKey = 'parachute_daily_root_path';
   static const String _journalsFolderNameKey = 'parachute_daily_journals_folder';
   static const String _assetsFolderNameKey = 'parachute_daily_assets_folder';
+  static const String _reflectionsFolderNameKey = 'parachute_daily_reflections_folder';
+  static const String _chatLogFolderNameKey = 'parachute_daily_chatlog_folder';
   static const String _secureBookmarkKey = 'parachute_daily_secure_bookmark';
   static const String _userConfiguredKey = 'parachute_daily_user_configured';
 
   // Default subfolder names
   static const String _defaultJournalsFolderName = 'journals';
   static const String _defaultAssetsFolderName = 'assets';
+  static const String _defaultReflectionsFolderName = 'reflections';
+  static const String _defaultChatLogFolderName = 'chat-log';
   static const String _tempAudioFolderName = 'parachute_audio_temp';
 
   // Temp subfolder names with different retention policies
@@ -46,6 +50,8 @@ class FileSystemService {
   String? _tempAudioPath;
   String _journalsFolderName = _defaultJournalsFolderName;
   String _assetsFolderName = _defaultAssetsFolderName;
+  String _reflectionsFolderName = _defaultReflectionsFolderName;
+  String _chatLogFolderName = _defaultChatLogFolderName;
   bool _isInitialized = false;
   Future<void>? _initializationFuture;
 
@@ -190,6 +196,36 @@ class FileSystemService {
   Future<String> resolveAssetPath(String relativePath) async {
     final root = await getRootPath();
     return '$root/$relativePath';
+  }
+
+  // ============================================================
+  // Reflections Folder (AI-generated morning reflections)
+  // ============================================================
+
+  /// Get the reflections folder name
+  String getReflectionsFolderName() {
+    return _reflectionsFolderName;
+  }
+
+  /// Get the reflections folder path
+  Future<String> getReflectionsPath() async {
+    final root = await getRootPath();
+    return '$root/$_reflectionsFolderName';
+  }
+
+  // ============================================================
+  // Chat Log Folder (AI conversation summaries)
+  // ============================================================
+
+  /// Get the chat log folder name
+  String getChatLogFolderName() {
+    return _chatLogFolderName;
+  }
+
+  /// Get the chat log folder path
+  Future<String> getChatLogPath() async {
+    final root = await getRootPath();
+    return '$root/$_chatLogFolderName';
   }
 
   /// Generate a path for a new image asset
@@ -415,6 +451,8 @@ class FileSystemService {
   Future<bool> setSubfolderNames({
     String? journalsFolderName,
     String? assetsFolderName,
+    String? reflectionsFolderName,
+    String? chatLogFolderName,
   }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -427,6 +465,16 @@ class FileSystemService {
       if (assetsFolderName != null && assetsFolderName.isNotEmpty) {
         _assetsFolderName = assetsFolderName;
         await prefs.setString(_assetsFolderNameKey, assetsFolderName);
+      }
+
+      if (reflectionsFolderName != null && reflectionsFolderName.isNotEmpty) {
+        _reflectionsFolderName = reflectionsFolderName;
+        await prefs.setString(_reflectionsFolderNameKey, reflectionsFolderName);
+      }
+
+      if (chatLogFolderName != null && chatLogFolderName.isNotEmpty) {
+        _chatLogFolderName = chatLogFolderName;
+        await prefs.setString(_chatLogFolderNameKey, chatLogFolderName);
       }
 
       // Ensure folder structure with new names
@@ -509,9 +557,13 @@ class FileSystemService {
       // Load custom subfolder names
       _journalsFolderName = prefs.getString(_journalsFolderNameKey) ?? _defaultJournalsFolderName;
       _assetsFolderName = prefs.getString(_assetsFolderNameKey) ?? _defaultAssetsFolderName;
+      _reflectionsFolderName = prefs.getString(_reflectionsFolderNameKey) ?? _defaultReflectionsFolderName;
+      _chatLogFolderName = prefs.getString(_chatLogFolderNameKey) ?? _defaultChatLogFolderName;
 
       debugPrint('[FileSystemService] Journals folder: ${_journalsFolderName.isEmpty ? "(root)" : _journalsFolderName}');
       debugPrint('[FileSystemService] Assets folder: $_assetsFolderName');
+      debugPrint('[FileSystemService] Reflections folder: $_reflectionsFolderName');
+      debugPrint('[FileSystemService] Chat log folder: $_chatLogFolderName');
 
       await _ensureFolderStructure();
       await cleanupTempAudioFiles();

@@ -23,17 +23,16 @@ class ReflectionService {
   static Future<ReflectionService> create({
     required FileSystemService fileSystemService,
   }) async {
-    // Use the root path (e.g., Documents/Unforced.AG/Daily)
-    // Reflections are at {root}/reflections, alongside journals folder
-    final rootPath = await fileSystemService.getRootPath();
+    // Use the configured reflections path from FileSystemService
+    final reflectionsPath = await fileSystemService.getReflectionsPath();
     return ReflectionService._(
-      journalPath: rootPath,
+      journalPath: reflectionsPath,
       fileSystemService: fileSystemService,
     );
   }
 
-  /// Path to reflections directory (sibling to journals folder)
-  String get reflectionsPath => '$_journalPath/reflections';
+  /// Path to reflections directory (configured via settings)
+  String get reflectionsPath => _journalPath;
 
   /// Get the file path for a reflection on a specific date
   String getFilePath(DateTime date) {

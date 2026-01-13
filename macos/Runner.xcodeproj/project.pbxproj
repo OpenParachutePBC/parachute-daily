@@ -27,8 +27,10 @@
 		33CC10F32044A3C60003C045 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F22044A3C60003C045 /* Assets.xcassets */; };
 		33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F42044A3C60003C045 /* MainMenu.xib */; };
 		33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
+		41B4791D870CA19E785B9994 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; };
 		A242EFFB98A3CA62B061BBA9 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 40C2AA4946B4733910E5E04C /* Pods_RunnerTests.framework */; };
 		A9324E3D9C4BB33EF5733753 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1A0A7C22E590E6E480218718 /* Pods_Runner.framework */; };
+		AA3BF67D2F09F91300536A76 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = AA3BF67E2F09F91400536A77 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -103,6 +105,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA3BF67D2F09F91300536A76 /* FluidAudio in Frameworks */,
 				A9324E3D9C4BB33EF5733753 /* Pods_Runner.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -204,7 +207,6 @@
 				DFA17E18F43096221A476F6B /* Pods-RunnerTests.release.xcconfig */,
 				8615F262F3103C4C4F76B86A /* Pods-RunnerTests.profile.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
@@ -292,6 +294,9 @@
 				Base,
 			);
 			mainGroup = 33CC10E42044A3C60003C045;
+			packageReferences = (
+				AA3BF67C2F09F91200536A75 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
 			productRefGroup = 33CC10EE2044A3C60003C045 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -796,6 +801,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA3BF67C2F09F91200536A75 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 	};
+/* Begin XCSwiftPackageProductDependency section */
+		AA3BF67E2F09F91400536A77 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA3BF67C2F09F91200536A75 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
+
 	rootObject = 33CC10E52044A3C60003C045 /* Project object */;
 }
