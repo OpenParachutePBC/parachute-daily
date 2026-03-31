@@ -10,6 +10,20 @@ let store: SqliteStore;
 beforeEach(() => {
   const db = new Database(":memory:");
   store = new SqliteStore(db);
+
+  // Create custom tags used by edge/traversal/tool tests
+  store.createTag({
+    name: "person",
+    displayName: "Person",
+    description: "A person",
+    schema: [{ name: "role", type: "text" }],
+  });
+  store.createTag({
+    name: "project",
+    displayName: "Project",
+    description: "A project",
+    schema: [{ name: "status", type: "select", options: ["active", "paused", "complete"] }],
+  });
 });
 
 // ---- Schema & Seed ----
@@ -65,19 +79,19 @@ describe("things", () => {
   it("creates a thing with custom ID and tags", () => {
     const thing = store.createThing("Voice entry", {
       id: "2026-03-30-09-15-00-000000",
-      tags: [{ name: "daily-note", fields: { entry_type: "voice", date: "2026-03-30" } }],
+      tags: [{ name: "note", fields: { entry_type: "voice", date: "2026-03-30" } }],
       createdBy: "app",
     });
     expect(thing.id).toBe("2026-03-30-09-15-00-000000");
     expect(thing.createdBy).toBe("app");
     expect(thing.tags).toHaveLength(1);
-    expect(thing.tags![0].tagName).toBe("daily-note");
+    expect(thing.tags![0].tagName).toBe("note");
     expect(thing.tags![0].fieldValues.entry_type).toBe("voice");
   });
 
   it("gets a thing by ID with tags", () => {
     const created = store.createThing("Test", {
-      tags: [{ name: "daily-note", fields: { entry_type: "text" } }],
+      tags: [{ name: "note", fields: { entry_type: "text" } }],
     });
     const found = store.getThing(created.id);
     expect(found).not.toBeNull();
@@ -103,7 +117,7 @@ describe("things", () => {
 
   it("replaces tags on update", () => {
     const thing = store.createThing("Tagged", {
-      tags: [{ name: "daily-note", fields: { entry_type: "text" } }],
+      tags: [{ name: "note", fields: { entry_type: "text" } }],
     });
     const updated = store.updateThing(thing.id, {
       tags: [{ name: "card", fields: { card_type: "reflection" } }],
@@ -114,7 +128,7 @@ describe("things", () => {
 
   it("deletes a thing and cascades", () => {
     const thing = store.createThing("Delete me", {
-      tags: [{ name: "daily-note" }],
+      tags: [{ name: "note" }],
     });
     store.deleteThing(thing.id);
     expect(store.getThing(thing.id)).toBeNull();
@@ -129,12 +143,12 @@ describe("queryThings", () => {
   beforeEach(() => {
     store.createThing("Morning walk", {
       id: "2026-03-30-08-00-00-000000",
-      tags: [{ name: "daily-note", fields: { entry_type: "text", date: "2026-03-30" } }],
+      tags: [{ name: "note", fields: { entry_type: "text", date: "2026-03-30" } }],
     });
     store.createThing("Afternoon meeting", {
       id: "2026-03-30-14-00-00-000000",
       tags: [
-        { name: "daily-note", fields: { entry_type: "voice", date: "2026-03-30" } },
+        { name: "note", fields: { entry_type: "voice", date: "2026-03-30" } },
       ],
     });
     store.createThing("Yesterday reflection", {
@@ -144,20 +158,20 @@ describe("queryThings", () => {
   });
 
   it("queries by tag", () => {
-    const notes = store.queryThings({ tags: ["daily-note"] });
+    const notes = store.queryThings({ tags: ["note"] });
     expect(notes).toHaveLength(2);
   });
 
   it("queries by multiple tags (AND)", () => {
     // Tag one note with an extra tag
     store.tagThing("2026-03-30-08-00-00-000000", "person", {});
-    const results = store.queryThings({ tags: ["daily-note", "person"] });
+    const results = store.queryThings({ tags: ["note", "person"] });
     expect(results).toHaveLength(1);
   });
 
   it("queries with field filter", () => {
     const results = store.queryThings({
-      tags: ["daily-note"],
+      tags: ["note"],
       filters: { entry_type: "voice" },
     });
     expect(results).toHaveLength(1);
@@ -166,7 +180,7 @@ describe("queryThings", () => {
 
   it("queries with date range filter on tag field", () => {
     const results = store.queryThings({
-      tags: ["daily-note"],
+      tags: ["note"],
       filters: { date: "2026-03-30" },
     });
     expect(results).toHaveLength(2);
@@ -174,7 +188,7 @@ describe("queryThings", () => {
 
   it("respects sort and limit", () => {
     const results = store.queryThings({
-      tags: ["daily-note"],
+      tags: ["note"],
       sort: "id:desc",
       limit: 1,
     });
@@ -189,10 +203,10 @@ describe("queryThings", () => {
 describe("searchThings", () => {
   beforeEach(() => {
     store.createThing("Walked up Flagstaff trail with Alice", {
-      tags: [{ name: "daily-note", fields: { entry_type: "text" } }],
+      tags: [{ name: "note", fields: { entry_type: "text" } }],
     });
     store.createThing("Met with Bob about the Horizon project", {
-      tags: [{ name: "daily-note", fields: { entry_type: "text" } }],
+      tags: [{ name: "note", fields: { entry_type: "text" } }],
     });
     store.createThing("Today was a good day for reflection", {
       tags: [{ name: "card", fields: { card_type: "reflection" } }],
@@ -234,25 +248,25 @@ describe("tags", () => {
   });
 
   it("lists tags with counts", () => {
-    store.createThing("Note 1", { tags: [{ name: "daily-note" }] });
-    store.createThing("Note 2", { tags: [{ name: "daily-note" }] });
+    store.createThing("Note 1", { tags: [{ name: "note" }] });
+    store.createThing("Note 2", { tags: [{ name: "note" }] });
     const allTags = store.listTags();
-    const dailyNote = allTags.find((t) => t.name === "daily-note");
-    expect(dailyNote!.count).toBe(2);
+    const noteTag = allTags.find((t) => t.name === "note");
+    expect(noteTag!.count).toBe(2);
   });
 
   it("updates a tag", () => {
-    store.updateTag("daily-note", { description: "Updated description" });
-    const tag = store.getTag("daily-note");
+    store.updateTag("note", { description: "Updated description" });
+    const tag = store.getTag("note");
     expect(tag!.description).toBe("Updated description");
   });
 
   it("tags and untags a thing", () => {
     const thing = store.createThing("Test");
-    store.tagThing(thing.id, "daily-note", { entry_type: "text" });
+    store.tagThing(thing.id, "note", { entry_type: "text" });
     expect(store.getThingTags(thing.id)).toHaveLength(1);
 
-    store.untagThing(thing.id, "daily-note");
+    store.untagThing(thing.id, "note");
     expect(store.getThingTags(thing.id)).toHaveLength(0);
   });
 });
@@ -260,7 +274,7 @@ describe("tags", () => {
 // ---- Tag Validation ----
 
 describe("validateFieldValues", () => {
-  const schema = BUILTIN_TAGS.find((t) => t.name === "daily-note")!.schema;
+  const schema = BUILTIN_TAGS.find((t) => t.name === "note")!.schema;
 
   it("accepts valid values", () => {
     const errors = validateFieldValues(schema, { entry_type: "voice", duration_seconds: 120 });
@@ -294,7 +308,7 @@ describe("edges", () => {
 
   beforeEach(() => {
     const note = store.createThing("Met with Alice about Horizon", {
-      tags: [{ name: "daily-note" }],
+      tags: [{ name: "note" }],
     });
     noteId = note.id;
 
@@ -385,7 +399,7 @@ describe("traverse", () => {
     // note1 --mentions--> Horizon
     store.createThing("Meeting notes", {
       id: "note1",
-      tags: [{ name: "daily-note" }],
+      tags: [{ name: "note" }],
     });
     store.createThing("Alice", {
       id: "alice",
@@ -459,16 +473,16 @@ describe("tool execution", () => {
   beforeEach(() => {
     store.createThing("Morning walk in the park", {
       id: "entry-1",
-      tags: [{ name: "daily-note", fields: { entry_type: "text", date: "2026-03-30" } }],
+      tags: [{ name: "note", fields: { entry_type: "text", date: "2026-03-30" } }],
     });
     store.createThing("Afternoon coding session", {
       id: "entry-2",
-      tags: [{ name: "daily-note", fields: { entry_type: "text", date: "2026-03-30" } }],
+      tags: [{ name: "note", fields: { entry_type: "text", date: "2026-03-30" } }],
     });
   });
 
-  it("executes read-daily-notes tool", () => {
-    const results = store.executeTool("read-daily-notes", {
+  it("executes read-notes tool", () => {
+    const results = store.executeTool("read-notes", {
       date: "2026-03-30",
     }) as Thing[];
     expect(results).toHaveLength(2);
@@ -564,13 +578,13 @@ describe("tool execution", () => {
   it("validates parameter types", () => {
     // search-notes query must be string
     expect(() => store.executeTool("search-notes", { query: 123 })).toThrow("must be string");
-    // read-daily-notes limit must be number
-    expect(() => store.executeTool("read-daily-notes", { limit: "abc" })).toThrow("must be number");
+    // read-notes limit must be number
+    expect(() => store.executeTool("read-notes", { limit: "abc" })).toThrow("must be number");
   });
 
   it("allows optional parameters to be omitted", () => {
-    // read-daily-notes has no required params
-    const result = store.executeTool("read-daily-notes", {});
+    // read-notes has no required params
+    const result = store.executeTool("read-notes", {});
     expect(result).toBeDefined();
   });
 
@@ -578,8 +592,8 @@ describe("tool execution", () => {
     // Disable a tool
     store.db
       .prepare("UPDATE tools SET enabled = 'false' WHERE name = ?")
-      .run("read-daily-notes");
-    expect(() => store.executeTool("read-daily-notes", {})).toThrow("disabled");
+      .run("read-notes");
+    expect(() => store.executeTool("read-notes", {})).toThrow("disabled");
   });
 
   it("throws for unknown tool", () => {
@@ -595,7 +609,7 @@ describe("MCP generation", () => {
     const mcpTools = generateMcpTools(store.db);
     expect(mcpTools.length).toBeGreaterThan(0);
 
-    const readNotes = mcpTools.find((t) => t.name === "read-daily-notes");
+    const readNotes = mcpTools.find((t) => t.name === "read-notes");
     expect(readNotes).toBeDefined();
     expect(readNotes!.description).toContain("journal entries");
     expect(readNotes!.inputSchema).toBeDefined();
@@ -604,12 +618,12 @@ describe("MCP generation", () => {
 
   it("MCP tool execute works end-to-end", async () => {
     store.createThing("Test note", {
-      tags: [{ name: "daily-note", fields: { date: "2026-03-30" } }],
+      tags: [{ name: "note", fields: { date: "2026-03-30" } }],
     });
 
     const { generateMcpTools } = await import("./mcp.js");
     const mcpTools = generateMcpTools(store.db);
-    const readNotes = mcpTools.find((t) => t.name === "read-daily-notes")!;
+    const readNotes = mcpTools.find((t) => t.name === "read-notes")!;
     const results = readNotes.execute({ date: "2026-03-30" }) as Thing[];
     expect(results).toHaveLength(1);
   });

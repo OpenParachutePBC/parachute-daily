@@ -46,7 +46,7 @@ class ApiSearchResult {
 /// the server at [baseUrl].
 ///
 /// Key mappings:
-///   Journal entries = Things tagged "daily-note"
+///   Journal entries = Things tagged "note"
 ///   Agent cards     = Things tagged "card"
 ///   Agent/tools     = Tools table
 class DailyApiService {
@@ -69,7 +69,7 @@ class DailyApiService {
   };
 
   // ===========================================================================
-  // Journal Entry CRUD — backed by Things with "daily-note" tag
+  // Journal Entry CRUD — backed by Things with "note" tag
   // ===========================================================================
 
   /// Fetch entries for a specific date (YYYY-MM-DD).
@@ -80,7 +80,7 @@ class DailyApiService {
   /// authoritative: the date genuinely has nothing and the cache should be cleared.
   Future<List<JournalEntry>?> getEntries({required String date}) async {
     final uri = Uri.parse('$baseUrl/api/things').replace(
-      queryParameters: {'tag': 'daily-note', 'date': date, 'limit': '100'},
+      queryParameters: {'tag': 'note', 'date': date, 'limit': '100'},
     );
     debugPrint('[DailyApiService] GET $uri');
     try {
@@ -120,7 +120,7 @@ class DailyApiService {
       final entryType = metadata?['type'] as String? ?? 'text';
       final date = metadata?['date'] as String? ?? _dateStr(ts);
 
-      // Build daily-note tag field values from metadata
+      // Build note tag field values from metadata
       final tagFields = <String, dynamic>{
         'entry_type': entryType,
         'date': date,
@@ -136,7 +136,7 @@ class DailyApiService {
 
       final body = jsonEncode({
         'content': content,
-        'tags': {'daily-note': tagFields},
+        'tags': {'note': tagFields},
         'created_by': 'user',
       });
       final response = await _client
@@ -170,13 +170,13 @@ class DailyApiService {
       final patchBody = <String, dynamic>{};
       if (content != null) patchBody['content'] = content;
       if (metadata != null) {
-        // Translate metadata keys to daily-note tag fields
+        // Translate metadata keys to note tag fields
         final tagFields = <String, dynamic>{};
         if (metadata.containsKey('title')) tagFields['title'] = metadata['title'];
         if (metadata.containsKey('type')) tagFields['entry_type'] = metadata['type'];
         if (metadata.containsKey('audio_path')) tagFields['audio_url'] = metadata['audio_path'];
         if (tagFields.isNotEmpty) {
-          patchBody['tags'] = {'daily-note': tagFields};
+          patchBody['tags'] = {'note': tagFields};
         }
       }
 
@@ -299,7 +299,7 @@ class DailyApiService {
       await deleteEntry(replaceEntryId);
     }
 
-    // Create a Thing with daily-note tag and pending transcription
+    // Create a Thing with note tag and pending transcription
     return createEntry(
       content: '',
       metadata: {
@@ -333,7 +333,7 @@ class DailyApiService {
   }) async {
     if (query.trim().isEmpty) return [];
     final uri = Uri.parse('$baseUrl/api/search').replace(
-      queryParameters: {'q': query, 'tag': 'daily-note', 'limit': '$limit'},
+      queryParameters: {'q': query, 'tag': 'note', 'limit': '$limit'},
     );
     debugPrint('[DailyApiService] GET $uri');
     try {
@@ -362,7 +362,7 @@ class DailyApiService {
 
   /// Register the app's required tags and tools with the server.
   ///
-  /// Called on connect to ensure the server has the daily-note and card
+  /// Called on connect to ensure the server has the note and card
   /// tag definitions and any builtin tools the app expects.
   Future<bool> registerApp() async {
     final uri = Uri.parse('$baseUrl/api/register');
@@ -375,8 +375,8 @@ class DailyApiService {
           'app': 'parachute-daily',
           'tags': [
             {
-              'name': 'daily-note',
-              'display_name': 'Daily Note',
+              'name': 'note',
+              'display_name': 'Note',
               'description': 'A journal entry — text, voice, or handwriting',
               'schema': [
                 {'name': 'entry_type', 'type': 'select', 'options': ['text', 'voice', 'handwriting'], 'default': 'text'},
@@ -422,14 +422,14 @@ class DailyApiService {
 
   /// Convert a Thing JSON (from v2 graph API) to a [JournalEntry].
   ///
-  /// The Thing has tags: [{tagName: "daily-note", fieldValues: {...}}].
-  /// We extract the daily-note tag fields to populate JournalEntry properties.
+  /// The Thing has tags: [{tagName: "note", fieldValues: {...}}].
+  /// We extract the note tag fields to populate JournalEntry properties.
   static JournalEntry _thingToEntry(Map<String, dynamic> json) {
     final tags = json['tags'] as List<dynamic>? ?? [];
     Map<String, dynamic> noteFields = {};
     for (final tag in tags) {
       final tagMap = tag as Map<String, dynamic>;
-      if (tagMap['tagName'] == 'daily-note') {
+      if (tagMap['tagName'] == 'note') {
         noteFields = (tagMap['fieldValues'] as Map<String, dynamic>?) ?? {};
         break;
       }
@@ -464,7 +464,7 @@ class DailyApiService {
     Map<String, dynamic> noteFields = {};
     for (final tag in tags) {
       final tagMap = tag as Map<String, dynamic>;
-      if (tagMap['tagName'] == 'daily-note') {
+      if (tagMap['tagName'] == 'note') {
         noteFields = (tagMap['fieldValues'] as Map<String, dynamic>?) ?? {};
         break;
       }

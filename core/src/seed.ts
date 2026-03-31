@@ -7,8 +7,8 @@ import { registerTool, getTool } from "./tools.js";
 
 const BUILTIN_TAGS: Omit<Tag, "createdAt" | "updatedAt">[] = [
   {
-    name: "daily-note",
-    displayName: "Daily Note",
+    name: "note",
+    displayName: "Note",
     description: "A journal entry — text, voice, or handwriting",
     schema: [
       { name: "entry_type", type: "select", options: ["text", "voice", "handwriting"], default: "text" },
@@ -18,7 +18,7 @@ const BUILTIN_TAGS: Omit<Tag, "createdAt" | "updatedAt">[] = [
       { name: "cleanup_status", type: "select", options: ["pending", "processing", "complete", "failed"] },
       { name: "date", type: "date", description: "Journal date (YYYY-MM-DD)" },
     ],
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
   },
   {
     name: "card",
@@ -29,29 +29,7 @@ const BUILTIN_TAGS: Omit<Tag, "createdAt" | "updatedAt">[] = [
       { name: "read_at", type: "datetime", description: "When the user read this card" },
       { name: "date", type: "date", description: "Date this card covers" },
     ],
-    publishedBy: "parachute-daily",
-  },
-  {
-    name: "person",
-    displayName: "Person",
-    description: "A person — contact, collaborator, friend",
-    schema: [
-      { name: "email", type: "text" },
-      { name: "role", type: "text" },
-      { name: "notes", type: "text" },
-    ],
-    publishedBy: "parachute-daily",
-  },
-  {
-    name: "project",
-    displayName: "Project",
-    description: "A project or initiative",
-    schema: [
-      { name: "status", type: "select", options: ["active", "paused", "complete", "archived"] },
-      { name: "deadline", type: "date" },
-      { name: "notes", type: "text" },
-    ],
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
   },
 ];
 
@@ -59,9 +37,9 @@ const BUILTIN_TAGS: Omit<Tag, "createdAt" | "updatedAt">[] = [
 
 const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
   {
-    name: "read-daily-notes",
-    displayName: "Read Daily Notes",
-    description: "Read journal entries for a given date. Returns things tagged daily-note.",
+    name: "read-notes",
+    displayName: "Read Notes",
+    description: "Read journal entries for a given date.",
     toolType: "query",
     inputSchema: {
       type: "object",
@@ -72,17 +50,17 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
     },
     definition: {
       action: "query_things",
-      tags: ["daily-note"],
+      tags: ["note"],
       filters: { date: "$date" },
       sort: "created_at:asc",
       limit: "$limit",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
-    name: "read-recent-notes",
-    displayName: "Read Recent Notes",
+    name: "read-recent",
+    displayName: "Read Recent",
     description: "Read journal entries from the past N days.",
     toolType: "query",
     inputSchema: {
@@ -94,12 +72,12 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
     },
     definition: {
       action: "query_things",
-      tags: ["daily-note"],
+      tags: ["note"],
       filters: { created_at: { gte: "$since_date" } },
       sort: "created_at:desc",
       limit: "$limit",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -122,7 +100,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       tags: "$tags",
       limit: "$limit",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -146,7 +124,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       created_by: "tool:write-card",
       tags: { card: { card_type: "$card_type", date: "$date" } },
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -168,7 +146,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       sort: "created_at:desc",
       limit: "$limit",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -191,7 +169,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       sort: "created_at:desc",
       limit: "$limit",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -216,7 +194,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       content: "$content",
       tags: "$tags",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -237,20 +215,20 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       id: "$thing_id",
       content: "$content",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
     name: "link-things",
     displayName: "Link Things",
-    description: "Create a relationship between two things (e.g. note mentions person).",
+    description: "Create a relationship between two things.",
     toolType: "mutation",
     inputSchema: {
       type: "object",
       properties: {
         source_id: { type: "string", description: "Source thing ID" },
         target_id: { type: "string", description: "Target thing ID" },
-        relationship: { type: "string", description: "Relationship type (e.g. mentions, has-collaborator)" },
+        relationship: { type: "string", description: "Relationship type (e.g. mentions, related-to)" },
       },
       required: ["source_id", "target_id", "relationship"],
     },
@@ -260,7 +238,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       target: "$target_id",
       relationship: "$relationship",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -279,7 +257,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       action: "delete_thing",
       id: "$thing_id",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -291,7 +269,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       type: "object",
       properties: {
         thing_id: { type: "string", description: "ID of the thing to tag" },
-        tag_name: { type: "string", description: "Tag name to apply (e.g. 'person', 'project')" },
+        tag_name: { type: "string", description: "Tag name to apply" },
         fields: {
           type: "object",
           description: "Optional field values for the tag",
@@ -306,7 +284,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       tag_name: "$tag_name",
       fields: "$fields",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -327,7 +305,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       thing_id: "$thing_id",
       tag_name: "$tag_name",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -350,7 +328,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       edge: "$relationship",
       direction: "$direction",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
   {
@@ -379,7 +357,7 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
       target_tags: "$target_tags",
       limit: "$limit",
     },
-    publishedBy: "parachute-daily",
+    publishedBy: "parachute",
     enabled: true,
   },
 ];

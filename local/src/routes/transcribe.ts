@@ -17,7 +17,7 @@ export function transcribeRoutes(
   //   - audio_path: Override audio path (optional, defaults to Thing's audio_url field)
   //
   // Flow:
-  //   1. Reads audio_url from Thing's daily-note tag if audio_path not provided
+  //   1. Reads audio_url from Thing's note tag if audio_path not provided
   //   2. Resolves to absolute path (relative paths resolved against assetsDir)
   //   3. Transcribes audio
   //   4. Updates Thing content + transcription_status
@@ -40,9 +40,9 @@ export function transcribeRoutes(
     // Resolve audio path
     let audioPath = body.audio_path;
     if (!audioPath) {
-      // Extract from daily-note tag
+      // Extract from note tag
       const noteTag = (thing.tags ?? []).find(
-        (t: any) => t.tagName === "daily-note",
+        (t: any) => t.tagName === "note",
       );
       const fields = noteTag?.fieldValues ?? {};
       audioPath = fields.audio_url as string | undefined;
@@ -61,14 +61,14 @@ export function transcribeRoutes(
     if (!(await transcription.isAvailable())) {
       // Update status to failed
       store.updateThing(body.thing_id, {
-        tags: [{ name: "daily-note", fields: { transcription_status: "failed" } }],
+        tags: [{ name: "note", fields: { transcription_status: "failed" } }],
       });
       return c.json({ error: "No transcription backend available" }, 503);
     }
 
     // Set status to processing
     store.updateThing(body.thing_id, {
-      tags: [{ name: "daily-note", fields: { transcription_status: "processing" } }],
+      tags: [{ name: "note", fields: { transcription_status: "processing" } }],
     });
 
     // Transcribe (async — but we await it here since the client polls)
@@ -78,7 +78,7 @@ export function transcribeRoutes(
       // Update Thing with transcription text
       store.updateThing(body.thing_id, {
         content: result.text,
-        tags: [{ name: "daily-note", fields: { transcription_status: "transcribed" } }],
+        tags: [{ name: "note", fields: { transcription_status: "transcribed" } }],
       });
 
       return c.json({
@@ -93,7 +93,7 @@ export function transcribeRoutes(
 
       // Update status to failed
       store.updateThing(body.thing_id, {
-        tags: [{ name: "daily-note", fields: { transcription_status: "failed" } }],
+        tags: [{ name: "note", fields: { transcription_status: "failed" } }],
       });
 
       return c.json({ error: message, status: "failed" }, 500);

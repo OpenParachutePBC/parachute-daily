@@ -47,13 +47,13 @@ describe("things", () => {
   it("creates a thing", async () => {
     const res = await req("POST", "/things", {
       content: "Morning walk",
-      tags: { "daily-note": { entry_type: "text", date: "2026-03-30" } },
+      tags: { "note": { entry_type: "text", date: "2026-03-30" } },
     });
     expect(res.status).toBe(201);
     const thing = await res.json();
     expect(thing.content).toBe("Morning walk");
     expect(thing.tags).toHaveLength(1);
-    expect(thing.tags[0].tagName).toBe("daily-note");
+    expect(thing.tags[0].tagName).toBe("note");
   });
 
   it("gets a thing by ID", async () => {
@@ -95,14 +95,14 @@ describe("things", () => {
   it("queries things by tag", async () => {
     await req("POST", "/things", {
       content: "Note 1",
-      tags: { "daily-note": { date: "2026-03-30" } },
+      tags: { "note": { date: "2026-03-30" } },
     });
     await req("POST", "/things", {
       content: "Card 1",
       tags: { card: { card_type: "reflection" } },
     });
 
-    const res = await req("GET", "/things?tag=daily-note");
+    const res = await req("GET", "/things?tag=note");
     expect(res.status).toBe(200);
     const things = await res.json();
     expect(things).toHaveLength(1);
@@ -115,7 +115,6 @@ describe("things", () => {
     const personRes = await req("POST", "/things", {
       content: "Alice",
       id: "alice",
-      tags: { person: {} },
     });
 
     await req("POST", "/edges", {
@@ -140,7 +139,7 @@ describe("tags", () => {
     expect(res.status).toBe(200);
     const tags = await res.json();
     expect(tags.length).toBeGreaterThan(0);
-    expect(tags.some((t: any) => t.name === "daily-note")).toBe(true);
+    expect(tags.some((t: any) => t.name === "note")).toBe(true);
   });
 
   it("creates a custom tag", async () => {
@@ -156,7 +155,7 @@ describe("tags", () => {
   });
 
   it("gets a tag by name", async () => {
-    const res = await req("GET", "/tags/daily-note");
+    const res = await req("GET", "/tags/note");
     expect(res.status).toBe(200);
     const tag = await res.json();
     expect(tag.schema.length).toBeGreaterThan(0);
@@ -193,16 +192,16 @@ describe("tools", () => {
     const res = await req("GET", "/tools");
     const tools = await res.json();
     expect(tools.length).toBeGreaterThan(0);
-    expect(tools.some((t: any) => t.name === "read-daily-notes")).toBe(true);
+    expect(tools.some((t: any) => t.name === "read-notes")).toBe(true);
   });
 
   it("executes a tool", async () => {
     await req("POST", "/things", {
       content: "Test note",
-      tags: { "daily-note": { entry_type: "text", date: "2026-03-30" } },
+      tags: { "note": { entry_type: "text", date: "2026-03-30" } },
     });
 
-    const res = await req("POST", "/tools/read-daily-notes/execute", {
+    const res = await req("POST", "/tools/read-notes/execute", {
       date: "2026-03-30",
     });
     expect(res.status).toBe(200);
@@ -222,11 +221,11 @@ describe("search", () => {
   it("searches things by content", async () => {
     await req("POST", "/things", {
       content: "Walked up Flagstaff trail",
-      tags: { "daily-note": {} },
+      tags: { "note": {} },
     });
     await req("POST", "/things", {
       content: "Meeting about Horizon",
-      tags: { "daily-note": {} },
+      tags: { "note": {} },
     });
 
     const res = await req("GET", "/search?q=Flagstaff");
@@ -238,7 +237,7 @@ describe("search", () => {
 
   it("traverses the graph", async () => {
     await req("POST", "/things", { content: "Note", id: "note1" });
-    await req("POST", "/things", { content: "Alice", id: "alice", tags: { person: {} } });
+    await req("POST", "/things", { content: "Alice", id: "alice" });
     await req("POST", "/edges", {
       source_id: "note1",
       target_id: "alice",
@@ -291,8 +290,8 @@ describe("register", () => {
   it("skips existing tags/tools", async () => {
     const res = await req("POST", "/register", {
       app: "parachute-daily",
-      tags: [{ name: "daily-note", display_name: "Daily Note" }],
-      tools: [{ name: "read-daily-notes", description: "Read notes" }],
+      tags: [{ name: "note", display_name: "Note" }],
+      tools: [{ name: "read-notes", description: "Read notes" }],
     });
     const data = await res.json();
     expect(data.tags_created).toBe(0);

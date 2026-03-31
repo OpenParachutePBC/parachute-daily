@@ -54,7 +54,7 @@ app.route("/api/transcribe", transcribeRoutes(store, transcription, ASSETS_DIR))
 // Mount graph API routes with auto-transcription hook
 const routes = createRoutes(store, ASSETS_DIR, (thing) => {
   // Auto-transcribe voice entries when created with processing status
-  const noteTag = (thing.tags ?? []).find((t: any) => t.tagName === "daily-note");
+  const noteTag = (thing.tags ?? []).find((t: any) => t.tagName === "note");
   if (!noteTag) return;
   const fields = noteTag.fieldValues ?? {};
   if (fields.transcription_status !== "processing") return;
@@ -71,13 +71,13 @@ const routes = createRoutes(store, ASSETS_DIR, (thing) => {
     transcription.transcribe(audioPath).then((result) => {
       store.updateThing(thing.id, {
         content: result.text,
-        tags: [{ name: "daily-note", fields: { transcription_status: "transcribed" } }],
+        tags: [{ name: "note", fields: { transcription_status: "transcribed" } }],
       });
       console.log(`[auto-transcribe] Done for ${thing.id} (${result.backend})`);
     }).catch((err) => {
       console.error(`[auto-transcribe] Failed for ${thing.id}: ${err.message}`);
       store.updateThing(thing.id, {
-        tags: [{ name: "daily-note", fields: { transcription_status: "failed" } }],
+        tags: [{ name: "note", fields: { transcription_status: "failed" } }],
       });
     });
   });

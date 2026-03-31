@@ -49,19 +49,17 @@ class Thing {
 
   // ---- Type checks ----
 
-  bool get isDailyNote => hasTag('daily-note');
+  bool get isNote => hasTag('note');
   bool get isCard => hasTag('card');
-  bool get isPerson => hasTag('person');
-  bool get isProject => hasTag('project');
 
-  // ---- Daily-note fields ----
+  // ---- Note fields ----
 
-  String get entryType => tagField<String>('daily-note', 'entry_type') ?? 'text';
-  String? get audioUrl => tagField<String>('daily-note', 'audio_url');
-  int? get durationSeconds => tagField<int>('daily-note', 'duration_seconds');
-  String? get transcriptionStatus => tagField<String>('daily-note', 'transcription_status');
-  String? get cleanupStatus => tagField<String>('daily-note', 'cleanup_status');
-  String? get noteDate => tagField<String>('daily-note', 'date');
+  String get entryType => tagField<String>('note', 'entry_type') ?? 'text';
+  String? get audioUrl => tagField<String>('note', 'audio_url');
+  int? get durationSeconds => tagField<int>('note', 'duration_seconds');
+  String? get transcriptionStatus => tagField<String>('note', 'transcription_status');
+  String? get cleanupStatus => tagField<String>('note', 'cleanup_status');
+  String? get noteDate => tagField<String>('note', 'date');
 
   // ---- Card fields ----
 

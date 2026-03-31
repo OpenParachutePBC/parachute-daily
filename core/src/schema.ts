@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_SQL = `
 -- Nodes: the universal record
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS tags (
   updated_at TEXT
 );
 
--- Typing: "this thing IS a daily-note" (with typed field values)
+-- Typing: "this thing IS a note" (with typed field values)
 CREATE TABLE IF NOT EXISTS thing_tags (
   thing_id TEXT NOT NULL REFERENCES things(id) ON DELETE CASCADE,
   tag_name TEXT NOT NULL REFERENCES tags(name),
@@ -105,14 +105,51 @@ export function initSchema(db: Database.Database): void {
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
 
-  // Record schema version if not already present
-  const row = db.prepare("SELECT version FROM schema_version WHERE version = ?").get(SCHEMA_VERSION) as
-    | { version: number }
-    | undefined;
-  if (!row) {
-    db.prepare("INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)").run(
-      SCHEMA_VERSION,
-      new Date().toISOString(),
-    );
+  // Run migrations
+  migrateToV2(db);
+
+  // Record schema version
+  db.prepare("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)").run(
+    SCHEMA_VERSION,
+    new Date().toISOString(),
+  );
+}
+
+/**
+ * V2 migration: rename daily-note → note, remove person/project builtins,
+ * rename tools (read-daily-notes → read-notes, read-recent-notes → read-recent).
+ */
+function migrateToV2(db: Database.Database): void {
+  const applied = db.prepare("SELECT version FROM schema_version WHERE version = 2").get();
+  if (applied) return;
+
+  // Rename tag: daily-note → note
+  const hasOld = db.prepare("SELECT name FROM tags WHERE name = 'daily-note'").get();
+  const hasNew = db.prepare("SELECT name FROM tags WHERE name = 'note'").get();
+  if (hasOld && !hasNew) {
+    db.prepare("INSERT INTO tags (name, display_name, description, schema_json, icon, color, published_by, created_at) SELECT 'note', 'Note', description, schema_json, icon, color, published_by, created_at FROM tags WHERE name = 'daily-note'").run();
+    db.prepare("UPDATE thing_tags SET tag_name = 'note' WHERE tag_name = 'daily-note'").run();
+    db.prepare("DELETE FROM tags WHERE name = 'daily-note'").run();
+  }
+
+  // Remove person/project builtins (only if published by parachute-daily and unused)
+  for (const tag of ["person", "project"]) {
+    const usage = db.prepare("SELECT COUNT(*) as cnt FROM thing_tags WHERE tag_name = ?").get(tag) as { cnt: number } | undefined;
+    if (usage && usage.cnt === 0) {
+      db.prepare("DELETE FROM tags WHERE name = ? AND published_by = 'parachute-daily'").run(tag);
+    }
+  }
+
+  // Rename tools
+  const toolRenames: [string, string][] = [
+    ["read-daily-notes", "read-notes"],
+    ["read-recent-notes", "read-recent"],
+  ];
+  for (const [oldName, newName] of toolRenames) {
+    const oldTool = db.prepare("SELECT name FROM tools WHERE name = ?").get(oldName);
+    const newTool = db.prepare("SELECT name FROM tools WHERE name = ?").get(newName);
+    if (oldTool && !newTool) {
+      db.prepare("DELETE FROM tools WHERE name = ?").run(oldName);
+    }
   }
 }

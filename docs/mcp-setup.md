@@ -64,8 +64,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 Once connected, Claude has access to 14 tools:
 
 ### Read
-- **read-daily-notes** — Journal entries for a date
-- **read-recent-notes** — Entries from the past N days
+- **read-notes** — Journal entries for a date
+- **read-recent** — Entries from the past N days
 - **search-notes** — Full-text search across entries
 - **read-cards** — AI-generated cards for a date
 - **read-recent-cards** — Recent cards

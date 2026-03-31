@@ -49,10 +49,10 @@ Plus `things_fts` (FTS5 virtual table with auto-sync triggers) and `schema_versi
 
 ### Builtin Tags
 
-- **daily-note** -- Journal entry (text/voice/handwriting) with fields: entry_type, audio_url, duration_seconds, transcription_status, cleanup_status, date
+- **note** -- Journal entry (text/voice/handwriting) with fields: entry_type, audio_url, duration_seconds, transcription_status, cleanup_status, date
 - **card** -- AI-generated output (reflection/summary/briefing) with fields: card_type, read_at, date
-- **person** -- Contact with email, role, notes
-- **project** -- Initiative with status, deadline, notes
+
+Additional tags (person, project, etc.) can be created by AI agents via MCP or by apps via the registration API.
 
 ### Thing ID Format
 
@@ -89,7 +89,7 @@ Declarative tool definitions stored as data:
 
 ### 14 Builtin MCP Tools
 
-**Queries:** read-daily-notes, read-recent-notes, search-notes, read-cards, read-recent-cards, get-related, search-graph
+**Queries:** read-notes, read-recent, search-notes, read-cards, read-recent-cards, get-related, search-graph
 
 **Mutations:** write-card, create-thing, update-thing, delete-thing, tag-thing, untag-thing, link-things
 
@@ -109,7 +109,7 @@ Things CRUD, Tags CRUD, Edges CRUD, Tools CRUD + execute, FTS search, graph trav
 
 ### Auto-Transcription Hook
 
-When a thing is created with `daily-note` tag + `transcription_status: "processing"` + `audio_url`, fires background transcription. Two backends: **Parakeet MLX** (local Python, macOS Apple Silicon) and **API** (OpenAI Whisper/Deepgram compatible). Fallback chain.
+When a thing is created with `note` tag + `transcription_status: "processing"` + `audio_url`, fires background transcription. Two backends: **Parakeet MLX** (local Python, macOS Apple Silicon) and **API** (OpenAI Whisper/Deepgram compatible). Fallback chain.
 
 ### MCP Stdio Server
 

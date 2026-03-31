@@ -67,7 +67,7 @@ lib/
 The app talks to a v2 graph API. Everything is a **Thing**, differentiated by **Tags** (Tana-style supertags):
 
 - **Thing**: Universal record with id, content, timestamps, status
-- **Tag**: Schema definition (e.g., `daily-note`, `card`, `person`, `project`)
+- **Tag**: Schema definition (e.g., `note`, `card`)
 - **ThingTag**: Typed metadata on a thing (tag + field values)
 - **Edge**: Directed relationship between two things
 
