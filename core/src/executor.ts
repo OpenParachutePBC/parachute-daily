@@ -17,6 +17,8 @@ export function executeTool(
   if (!tool) throw new Error(`Tool not found: ${toolName}`);
   if (!tool.enabled) throw new Error(`Tool is disabled: ${toolName}`);
 
+  validateParams(tool, params);
+
   const def = resolveParams(tool.definition, params);
   return executeDefinition(db, tool, def);
 }
@@ -157,6 +159,53 @@ function executeDeleteEdge(db: Database.Database, def: Record<string, unknown>):
   }
   edges.deleteEdge(db, source, target, relationship);
   return { deleted: true };
+}
+
+// ---- Input Validation ----
+
+const JSON_SCHEMA_TYPES: Record<string, (v: unknown) => boolean> = {
+  string: (v) => typeof v === "string",
+  number: (v) => typeof v === "number",
+  boolean: (v) => typeof v === "boolean",
+  array: (v) => Array.isArray(v),
+  object: (v) => typeof v === "object" && v !== null && !Array.isArray(v),
+};
+
+/**
+ * Validate tool parameters against the tool's inputSchema.
+ * Checks required fields and basic type correctness.
+ */
+function validateParams(tool: ToolDef, params: Record<string, unknown>): void {
+  const schema = tool.inputSchema;
+  if (!schema || typeof schema !== "object") return;
+
+  const required = (schema.required as string[]) ?? [];
+  const properties = (schema.properties as Record<string, Record<string, unknown>>) ?? {};
+
+  // Check required fields
+  for (const field of required) {
+    if (params[field] === undefined || params[field] === null) {
+      throw new Error(
+        `Tool '${tool.name}' requires parameter '${field}'`,
+      );
+    }
+  }
+
+  // Check types for provided fields
+  for (const [key, value] of Object.entries(params)) {
+    const propDef = properties[key];
+    if (!propDef) continue; // Allow extra params (forward-compatible)
+
+    const expectedType = propDef.type as string | undefined;
+    if (!expectedType) continue;
+
+    const checker = JSON_SCHEMA_TYPES[expectedType];
+    if (checker && !checker(value)) {
+      throw new Error(
+        `Tool '${tool.name}' parameter '${key}' must be ${expectedType}, got ${typeof value}`,
+      );
+    }
+  }
 }
 
 // ---- Parameter Resolution ----

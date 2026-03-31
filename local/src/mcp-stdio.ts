@@ -21,10 +21,9 @@ for (const tool of mcpTools) {
   server.tool(
     tool.name,
     tool.description,
-    async (extra) => {
+    tool.inputSchema as any,
+    async (params) => {
       try {
-        // Params come from the tool call arguments
-        const params = (extra as Record<string, unknown>).params ?? {};
         const result = tool.execute(params as Record<string, unknown>);
         return {
           content: [

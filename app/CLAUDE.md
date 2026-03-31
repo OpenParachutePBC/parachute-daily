@@ -1,34 +1,28 @@
-# Parachute App
+# Parachute Daily — Flutter App
 
-Unified Flutter app - voice journaling, AI chat, knowledge vault, and brain search.
+Voice journaling app with offline-first architecture. AI agents plug in via MCP.
 
 **Package**: `io.openparachute.parachute`
-
-**Related**: [Parachute Computer (Server)](../computer/CLAUDE.md) | [Parent Project](../CLAUDE.md)
 
 ---
 
 ## Architecture
 
 ```
-User → Parachute App → Parachute Computer → Claude Agent SDK → AI
-              ↓
-       ~/Parachute/Daily (local, offline-capable)
-       ~/Parachute/Chat (server-managed)
-       ~/Parachute/Brain (server-managed)
+User → Flutter App → GraphApiService → Parachute Daily Server (port 1940)
+            ↓                                    ↓
+   Local SQLite cache                    SQLite graph database
+   (offline journal)                     (Things, Tags, Edges, Tools)
+                                                 ↓
+                                         MCP stdio server
+                                         (Claude / AI agents)
 ```
 
-**Key principle**: Daily works offline. Chat, Vault, and Brain require server connection.
+**Key principle**: Daily works offline with local SQLite cache. Server connection enables sync, search, and AI agent access via MCP.
 
 ### Navigation
 
-Four-tab layout with persistent bottom navigation:
-- **Chat** (left) - Server-powered AI conversations
-- **Daily** (center-left) - Voice journaling, works offline
-- **Vault** (center-right) - Browse knowledge vault
-- **Brain** (right) - Memory navigator — unified timeline of conversations and journal entries
-
-Each tab has its own Navigator for independent navigation stacks.
+Single-screen layout — no tabs. The app shows the Daily journal directly.
 
 ---
 
@@ -36,15 +30,18 @@ Each tab has its own Navigator for independent navigation stacks.
 
 ```
 lib/
-├── main.dart                        # App entry, tab shell, global nav keys
-├── core/                            # Shared infrastructure (inlined, no separate package)
-│   ├── models/                      # Shared data models
-│   ├── providers/                   # Core Riverpod providers
-│   │   ├── app_state_provider.dart  # Server config, app mode, AppTab enum
+├── main.dart                        # App entry, _DailyShell (single screen)
+├── core/                            # Shared infrastructure
+│   ├── models/                      # Dart data models (Thing, JournalEntry, etc.)
+│   ├── providers/                   # Riverpod state management
+│   │   ├── app_state_provider.dart  # Server config, app mode
 │   │   ├── voice_input_providers.dart
-│   │   └── streaming_voice_providers.dart
+│   │   ├── streaming_voice_providers.dart
+│   │   ├── connectivity_provider.dart
+│   │   └── backend_health_provider.dart
 │   ├── services/
-│   │   ├── file_system_service.dart
+│   │   ├── graph_api_service.dart   # HTTP client for v2 /api/* endpoints
+│   │   ├── file_system_service.dart # Local file I/O
 │   │   ├── transcription/           # Audio → text (CANONICAL location)
 │   │   ├── vad/                     # Voice activity detection (CANONICAL)
 │   │   └── audio_processing/        # Audio filters (CANONICAL)
@@ -53,34 +50,48 @@ lib/
 │   │   └── app_theme.dart
 │   └── widgets/                     # Shared UI components
 └── features/
-    ├── chat/                        # AI chat (requires server)
-    │   ├── models/                  # ChatSession, ChatMessage, StreamEvent
-    │   ├── providers/               # Split into 9 provider files
-    │   ├── screens/                 # ChatHubScreen, ChatScreen, AgentHubScreen
-    │   ├── services/                # ChatService, ChatSessionService, etc.
-    │   └── widgets/                 # MessageBubble, ChatInput, SessionConfigSheet
     ├── daily/                       # Voice journaling (offline-capable)
-    │   ├── journal/                 # Journal CRUD, display
+    │   ├── home/                    # HomeScreen — main journal view
+    │   ├── journal/                 # Journal CRUD, entry display, local cache
     │   ├── recorder/                # Audio recording & transcription
     │   ├── capture/                 # Photo/handwriting input
     │   └── search/                  # Journal search
-    ├── vault/                       # Knowledge browser (requires server)
-    ├── brain/                       # Brain: memory navigator (requires server)
-    │   ├── providers/               # brainServiceProvider, brainMemoryProvider
-    │   ├── screens/                 # BrainHomeScreen (memory feed)
-    │   └── services/                # BrainService → /api/brain/ endpoints
-    ├── settings/                    # App settings
-    │   ├── screens/
-    │   ├── models/                  # TrustLevel
-    │   └── widgets/                 # BotConnectorsSection, HooksSection, TrustLevelsSection
+    ├── settings/                    # App settings (server URL, transcription, Omi device)
     └── onboarding/                  # Setup flow
 ```
 
 ---
 
-## Core Package (Inlined)
+## Data Model
 
-The `parachute-app-core` package was inlined into `lib/core/`. All imports use `package:parachute/core/...` paths. There is no separate core package dependency.
+The app talks to a v2 graph API. Everything is a **Thing**, differentiated by **Tags** (Tana-style supertags):
+
+- **Thing**: Universal record with id, content, timestamps, status
+- **Tag**: Schema definition (e.g., `daily-note`, `card`, `person`, `project`)
+- **ThingTag**: Typed metadata on a thing (tag + field values)
+- **Edge**: Directed relationship between two things
+
+### Server API
+
+The `GraphApiService` targets these endpoints on the Hono server (default port 1940):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET/POST /api/things` | Query / create things |
+| `GET/PATCH/DELETE /api/things/:id` | Get / update / delete a thing |
+| `GET /api/things/:id/edges` | Get edges for a thing |
+| `GET/POST /api/tags` | List / create tags |
+| `POST/DELETE /api/edges` | Create / delete edges |
+| `GET /api/search?q=...` | Full-text search (FTS5) |
+| `POST /api/search/traverse` | Graph traversal |
+| `POST /api/tools/:name/execute` | Execute a declarative tool |
+| `POST /api/storage/upload` | Upload audio/image assets |
+| `POST /api/register` | Register app's tags and tools |
+| `GET /api/health` | Server health check |
+
+### Offline Cache
+
+Journal entries are cached locally via `JournalLocalCache` (SQLite). The `PendingEntryQueue` queues mutations when offline and flushes them when the server is reachable.
 
 ---
 
@@ -91,10 +102,10 @@ The `parachute-app-core` package was inlined into `lib/core/`. All imports use `
 | Type | Use for | Example |
 |------|---------|---------|
 | `Provider<T>` | Singleton services | `fileSystemServiceProvider` |
-| `FutureProvider<T>.autoDispose` | Async data that should refresh | `chatSessionsProvider` |
-| `StateNotifierProvider` | Complex mutable state | `chatMessagesProvider` |
+| `FutureProvider<T>.autoDispose` | Async data that should refresh | `selectedJournalProvider` |
+| `StateNotifierProvider` | Complex mutable state | `journalRefreshTriggerProvider` |
 | `StreamProvider` | Reactive streams | `streamingTranscriptionProvider` |
-| `StateProvider` | Simple UI state | `currentTabProvider` |
+| `StateProvider` | Simple UI state | `selectedJournalDateProvider` |
 
 **Important**: `ref.listen` must be inside `build()`, never in `initState` or callbacks.
 
@@ -109,23 +120,12 @@ Audio processing services have a SINGLE canonical location:
 - Audio processing: `core/services/audio_processing/`
 - Transcription: `core/services/transcription/`
 
-### ChatSession API
-
-- `ChatSession` has no `module` field — uses `agentPath`, `agentName`, `agentType`
-- `ChatSession.title` is `String?` (nullable) — use `displayTitle` for guaranteed non-null
-- `StreamEventType` has 14 values including `typedError`, `userQuestion`, `promptMetadata`
-- `ChatSource` enum includes `telegram`, `discord` for bot-originated sessions
-
 ### Layout & Overflow Prevention
 
-- **Bottom sheets**: Always wrap content between the drag handle and action buttons in `Flexible` + `SingleChildScrollView`. Pin the handle and buttons outside the scroll region. Constrain max height to `MediaQuery.of(context).size.height * 0.85`.
-- **Rows with optional badges**: Use `Flexible(flex: 0)` on badge containers so they shrink when space is tight. Never assume a fixed number of badges will fit.
-- **Dialog dimensions**: Never hardcode `width: 400`. Use `ConstrainedBox(constraints: BoxConstraints(maxWidth: 400))` so dialogs shrink on narrow screens.
-- **Chip/tag lists**: Always use `Wrap` (not `Row`) for lists of chips that may grow.
-- **SegmentedButton labels**: Keep labels short (<12 chars) or add `overflow: TextOverflow.ellipsis` inside a `Flexible`.
-- **Breakpoint-adjacent widths**: Test at 600px, 601px, 1199px, and 1200px. The chat layout transitions are abrupt — verify no content overflows at the exact boundary values.
-- **Embedded toolbar**: The embedded toolbar Row should accommodate title + up to 3 badges + 2 icon buttons. Badges should be wrapped in a `Flexible(flex: 0)` Row so they shrink gracefully.
-- **Metadata rows**: Wrap source/agent name text in `Flexible` with `TextOverflow.ellipsis` — names can be arbitrarily long.
+- **Bottom sheets**: Wrap content between drag handle and buttons in `Flexible` + `SingleChildScrollView`. Pin handle and buttons outside scroll. Max height: `MediaQuery.of(context).size.height * 0.85`.
+- **Dialog dimensions**: Never hardcode `width: 400`. Use `ConstrainedBox(constraints: BoxConstraints(maxWidth: 400))`.
+- **Chip/tag lists**: Always use `Wrap` (not `Row`) for lists that may grow.
+- **Breakpoint widths**: Test at 600px, 601px, 1199px, 1200px — transitions are abrupt.
 
 ---
 
@@ -135,19 +135,19 @@ Audio processing services have a SINGLE canonical location:
 # Desktop development
 flutter run -d macos
 
-# Server required for Chat/Vault/Brain
-cd ../computer && parachute server
+# Server (separate terminal)
+cd ../local && npx tsx watch src/server.ts
 
 # Static analysis
 flutter analyze
 
 # Integration tests (macOS, one at a time)
-flutter test integration_test/chat_test.dart
+flutter test integration_test/daily_test.dart
 ```
 
 ### Sherpa-ONNX Version Pin
 
-**IMPORTANT**: Pin sherpa_onnx to **1.12.20** via `dependency_overrides`. Version 1.12.21+ has ARM SIGSEGV crash.
+**IMPORTANT**: Pin sherpa_onnx to **1.12.20** via `dependency_overrides`. Version 1.12.21+ has ARM SIGSEGV crash on Daylight DC-1.
 
 ---
 
@@ -156,8 +156,6 @@ flutter test integration_test/chat_test.dart
 - `core/` is inlined — do NOT add `parachute_app_core` back as a dependency
 - Integration tests share the macOS app process — don't run them in parallel
 - First build takes ~90s (pod install + compile), subsequent builds ~15-20s
-- `VAULT_PATH` on server defaults to `./sample-vault` — set to `~/Parachute` in prod
-- Server runs on port 3333 by default
-- `Wrap` not `Row` for chip lists that may overflow (workspace chips, trust level chips, badge rows)
-- Bottom sheets without `SingleChildScrollView` will overflow when keyboard opens or content grows
-- `DirectoryPickerDialog` uses responsive `ConstrainedBox` — don't revert to hardcoded dimensions
+- Server runs on port 1940 by default (configurable via `PORT` env var)
+- `Wrap` not `Row` for chip lists that may overflow
+- Bottom sheets without `SingleChildScrollView` will overflow when keyboard opens

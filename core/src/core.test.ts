@@ -523,6 +523,27 @@ describe("tool execution", () => {
     expect(edges[0].relationship).toBe("mentions");
   });
 
+  it("validates required parameters", () => {
+    // search-notes requires "query"
+    expect(() => store.executeTool("search-notes", {})).toThrow("requires parameter 'query'");
+    // Should succeed with required param
+    const result = store.executeTool("search-notes", { query: "test" });
+    expect(result).toBeDefined();
+  });
+
+  it("validates parameter types", () => {
+    // search-notes query must be string
+    expect(() => store.executeTool("search-notes", { query: 123 })).toThrow("must be string");
+    // read-daily-notes limit must be number
+    expect(() => store.executeTool("read-daily-notes", { limit: "abc" })).toThrow("must be number");
+  });
+
+  it("allows optional parameters to be omitted", () => {
+    // read-daily-notes has no required params
+    const result = store.executeTool("read-daily-notes", {});
+    expect(result).toBeDefined();
+  });
+
   it("throws for disabled tool", () => {
     // Disable a tool
     store.db
