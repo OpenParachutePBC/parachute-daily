@@ -264,6 +264,73 @@ const BUILTIN_TOOLS: Omit<ToolDef, "createdAt" | "updatedAt">[] = [
     enabled: true,
   },
   {
+    name: "delete-thing",
+    displayName: "Delete Thing",
+    description: "Permanently delete a thing and all its tags and edges.",
+    toolType: "mutation",
+    inputSchema: {
+      type: "object",
+      properties: {
+        thing_id: { type: "string", description: "ID of the thing to delete" },
+      },
+      required: ["thing_id"],
+    },
+    definition: {
+      action: "delete_thing",
+      id: "$thing_id",
+    },
+    publishedBy: "parachute-daily",
+    enabled: true,
+  },
+  {
+    name: "tag-thing",
+    displayName: "Tag Thing",
+    description: "Apply a tag to an existing thing with optional field values.",
+    toolType: "mutation",
+    inputSchema: {
+      type: "object",
+      properties: {
+        thing_id: { type: "string", description: "ID of the thing to tag" },
+        tag_name: { type: "string", description: "Tag name to apply (e.g. 'person', 'project')" },
+        fields: {
+          type: "object",
+          description: "Optional field values for the tag",
+          additionalProperties: true,
+        },
+      },
+      required: ["thing_id", "tag_name"],
+    },
+    definition: {
+      action: "tag_thing",
+      thing_id: "$thing_id",
+      tag_name: "$tag_name",
+      fields: "$fields",
+    },
+    publishedBy: "parachute-daily",
+    enabled: true,
+  },
+  {
+    name: "untag-thing",
+    displayName: "Untag Thing",
+    description: "Remove a tag from a thing.",
+    toolType: "mutation",
+    inputSchema: {
+      type: "object",
+      properties: {
+        thing_id: { type: "string", description: "ID of the thing to untag" },
+        tag_name: { type: "string", description: "Tag name to remove" },
+      },
+      required: ["thing_id", "tag_name"],
+    },
+    definition: {
+      action: "untag_thing",
+      thing_id: "$thing_id",
+      tag_name: "$tag_name",
+    },
+    publishedBy: "parachute-daily",
+    enabled: true,
+  },
+  {
     name: "get-related",
     displayName: "Get Related",
     description: "Find things related to a given thing via edges.",

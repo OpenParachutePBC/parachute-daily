@@ -512,6 +512,36 @@ describe("tool execution", () => {
     expect(edge.targetId).toBe("alice");
   });
 
+  it("executes delete-thing tool", () => {
+    const thing = store.createThing("To be deleted", { id: "del-1" });
+    const result = store.executeTool("delete-thing", { thing_id: "del-1" }) as { deleted: boolean };
+    expect(result.deleted).toBe(true);
+    expect(store.getThing("del-1")).toBeNull();
+  });
+
+  it("executes tag-thing tool", () => {
+    store.createThing("Alice", { id: "tag-test-1" });
+    const result = store.executeTool("tag-thing", {
+      thing_id: "tag-test-1",
+      tag_name: "person",
+      fields: { role: "engineer" },
+    }) as { tagged: boolean };
+    expect(result.tagged).toBe(true);
+    const tags = store.getThingTags("tag-test-1");
+    expect(tags.some((t) => t.tagName === "person")).toBe(true);
+  });
+
+  it("executes untag-thing tool", () => {
+    store.createThing("Bob", { id: "untag-test-1", tags: [{ name: "person" }] });
+    const result = store.executeTool("untag-thing", {
+      thing_id: "untag-test-1",
+      tag_name: "person",
+    }) as { untagged: boolean };
+    expect(result.untagged).toBe(true);
+    const tags = store.getThingTags("untag-test-1");
+    expect(tags.some((t) => t.tagName === "person")).toBe(false);
+  });
+
   it("executes get-related tool", () => {
     store.createThing("Alice", { id: "alice", tags: [{ name: "person" }] });
     store.createEdge("entry-1", "alice", "mentions");

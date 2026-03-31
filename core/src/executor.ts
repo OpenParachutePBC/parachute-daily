@@ -47,6 +47,12 @@ function executeDefinition(
       return executeCreateEdge(db, def);
     case "delete_edge":
       return executeDeleteEdge(db, def);
+    case "delete_thing":
+      return executeDeleteThing(db, def);
+    case "tag_thing":
+      return executeTagThing(db, def);
+    case "untag_thing":
+      return executeUntagThing(db, def);
     default:
       throw new Error(`Unknown tool action: ${action}`);
   }
@@ -148,6 +154,30 @@ function executeCreateEdge(db: Database.Database, def: Record<string, unknown>):
     properties: def.properties as Record<string, unknown> | undefined,
     createdBy: def.created_by as string | undefined,
   });
+}
+
+function executeDeleteThing(db: Database.Database, def: Record<string, unknown>): { deleted: boolean } {
+  const id = def.id as string;
+  if (!id) throw new Error("delete_thing requires an 'id' parameter");
+  things.deleteThing(db, id);
+  return { deleted: true };
+}
+
+function executeTagThing(db: Database.Database, def: Record<string, unknown>): { tagged: boolean } {
+  const id = def.thing_id as string;
+  const tagName = def.tag_name as string;
+  if (!id || !tagName) throw new Error("tag_thing requires 'thing_id' and 'tag_name'");
+  const fields = (def.fields as Record<string, unknown>) ?? {};
+  things.tagThing(db, id, tagName, fields);
+  return { tagged: true };
+}
+
+function executeUntagThing(db: Database.Database, def: Record<string, unknown>): { untagged: boolean } {
+  const id = def.thing_id as string;
+  const tagName = def.tag_name as string;
+  if (!id || !tagName) throw new Error("untag_thing requires 'thing_id' and 'tag_name'");
+  things.untagThing(db, id, tagName);
+  return { untagged: true };
 }
 
 function executeDeleteEdge(db: Database.Database, def: Record<string, unknown>): { deleted: boolean } {
