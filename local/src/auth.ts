@@ -138,8 +138,24 @@ function generateKey(): { fullKey: string; keyId: string } {
 // ---------------------------------------------------------------------------
 
 let _config: ServerConfig = loadConfig();
+let _configMtime: number = 0;
+try { _configMtime = fs.statSync(CONFIG_PATH).mtimeMs; } catch (_) {}
+
+/** Reload config from disk if the file has been modified. */
+function reloadConfigIfChanged(): void {
+  try {
+    const stat = fs.statSync(CONFIG_PATH);
+    if (stat.mtimeMs > _configMtime) {
+      _config = loadConfig();
+      _configMtime = stat.mtimeMs;
+    }
+  } catch (_) {
+    // File doesn't exist or can't be read — keep current config
+  }
+}
 
 export function getAuthMode(): AuthMode {
+  reloadConfigIfChanged();
   return _config.security?.auth_mode ?? "remote";
 }
 

@@ -4,6 +4,11 @@ import path from "node:path";
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 
+const MAX_UPLOAD_BYTES = parseInt(
+  process.env.PARACHUTE_MAX_UPLOAD_MB ?? "100",
+  10,
+) * 1024 * 1024;
+
 export function storageRoutes(assetsDir: string): Hono {
   const app = new Hono();
 
@@ -19,6 +24,12 @@ export function storageRoutes(assetsDir: string): Hono {
       const formData = await c.req.formData();
       const file = formData.get("file") as File | null;
       if (!file) return c.json({ error: "file is required" }, 400);
+
+      if (file.size > MAX_UPLOAD_BYTES) {
+        return c.json({
+          error: `File too large (${Math.round(file.size / 1024 / 1024)}MB). Max: ${MAX_UPLOAD_BYTES / 1024 / 1024}MB`,
+        }, 413);
+      }
 
       const ext = path.extname(file.name).toLowerCase();
       if (!ALLOWED_EXTENSIONS.has(ext)) {
