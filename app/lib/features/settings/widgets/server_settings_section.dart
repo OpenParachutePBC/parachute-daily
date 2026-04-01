@@ -85,10 +85,10 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
     }
   }
 
-  Future<void> _saveApiKey() async {
+  Future<void> _saveApiKey({bool showSnackbar = true}) async {
     final key = _apiKeyController.text.trim();
     await ref.read(apiKeyProvider.notifier).setApiKey(key.isEmpty ? null : key);
-    if (mounted) {
+    if (showSnackbar && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(key.isEmpty ? 'API key cleared' : 'API key saved'),
@@ -258,7 +258,10 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
             SizedBox(width: Spacing.sm),
             Expanded(
               child: FilledButton.icon(
-                onPressed: _saveServerUrl,
+                onPressed: () async {
+                  await _saveServerUrl();
+                  await _saveApiKey(showSnackbar: false);
+                },
                 icon: const Icon(Icons.save, size: 18),
                 label: const Text('Save'),
                 style: FilledButton.styleFrom(
