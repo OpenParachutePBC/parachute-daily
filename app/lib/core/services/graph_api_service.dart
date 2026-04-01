@@ -1,11 +1,10 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/thing.dart';
 
-/// Service for communicating with the Parachute Daily v2 graph API.
-/// Targets /api/* on either local (Bun) or hosted (CF Workers) server.
+/// Service for communicating with the Parachute Daily v3 API.
+/// Targets /api/* on the local server.
 class GraphApiService {
   final String baseUrl;
   final http.Client _client;
@@ -25,79 +24,104 @@ class GraphApiService {
         _client = client ?? http.Client(),
         _timeout = timeout;
 
-  // ---- Things ----
+  // ---- Notes ----
 
-  /// Query things by tag, date, filters.
-  Future<List<Thing>?> queryThings({
+  /// Query notes by tags, date range, etc.
+  Future<List<Note>?> queryNotes({
     String? tag,
-    String? date,
+    String? excludeTag,
+    String? dateFrom,
+    String? dateTo,
     String? sort,
     int? limit,
   }) async {
     final params = <String, String>{};
     if (tag != null) params['tag'] = tag;
-    if (date != null) params['date'] = date;
+    if (excludeTag != null) params['exclude_tag'] = excludeTag;
+    if (dateFrom != null) params['date_from'] = dateFrom;
+    if (dateTo != null) params['date_to'] = dateTo;
     if (sort != null) params['sort'] = sort;
     if (limit != null) params['limit'] = limit.toString();
 
-    final data = await _get('/things', params);
+    final data = await _get('/notes', params);
     if (data == null) return null;
-    return (data as List).map((j) => Thing.fromJson(j as Map<String, dynamic>)).toList();
+    return (data as List).map((j) => Note.fromJson(j as Map<String, dynamic>)).toList();
   }
 
-  /// Create a thing with optional tags.
-  Future<Thing?> createThing(
+  /// Create a note with optional tags and path.
+  Future<Note?> createNote(
     String content, {
     String? id,
-    Map<String, Map<String, dynamic>>? tags,
-    String? createdBy,
+    String? path,
+    List<String>? tags,
   }) async {
     final body = <String, dynamic>{
       'content': content,
       if (id != null) 'id': id,
+      if (path != null) 'path': path,
       if (tags != null) 'tags': tags,
-      if (createdBy != null) 'created_by': createdBy,
     };
-    final data = await _post('/things', body);
+    final data = await _post('/notes', body);
     if (data == null) return null;
-    return Thing.fromJson(data as Map<String, dynamic>);
+    return Note.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Get a thing by ID.
-  Future<Thing?> getThing(String id, {bool includeEdges = false}) async {
-    final params = <String, String>{};
-    if (includeEdges) params['edges'] = 'true';
-    final data = await _get('/things/$id', params);
+  /// Get a note by ID.
+  Future<Note?> getNote(String id) async {
+    final data = await _get('/notes/$id', {});
     if (data == null) return null;
-    return Thing.fromJson(data as Map<String, dynamic>);
+    return Note.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Update a thing.
-  Future<Thing?> updateThing(
+  /// Update a note's content and/or path.
+  Future<Note?> updateNote(
     String id, {
     String? content,
-    String? status,
-    Map<String, Map<String, dynamic>>? tags,
+    String? path,
   }) async {
     final body = <String, dynamic>{};
     if (content != null) body['content'] = content;
-    if (status != null) body['status'] = status;
-    if (tags != null) body['tags'] = tags;
-    final data = await _patch('/things/$id', body);
+    if (path != null) body['path'] = path;
+    final data = await _patch('/notes/$id', body);
     if (data == null) return null;
-    return Thing.fromJson(data as Map<String, dynamic>);
+    return Note.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Delete a thing.
-  Future<bool> deleteThing(String id) async {
-    final data = await _delete('/things/$id');
+  /// Delete a note.
+  Future<bool> deleteNote(String id) async {
+    final data = await _delete('/notes/$id');
     return data != null;
+  }
+
+  /// Tag a note.
+  Future<Note?> tagNote(String id, List<String> tags) async {
+    final data = await _post('/notes/$id/tags', {'tags': tags});
+    if (data == null) return null;
+    return Note.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Untag a note.
+  Future<Note?> untagNote(String id, List<String> tags) async {
+    final data = await _deleteWithBody('/notes/$id/tags', {'tags': tags});
+    if (data == null) return null;
+    return Note.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Get links for a note.
+  Future<List<NoteLink>?> getLinks(
+    String noteId, {
+    String direction = 'both',
+  }) async {
+    final params = <String, String>{'direction': direction};
+    final data = await _get('/notes/$noteId/links', params);
+    if (data == null) return null;
+    return (data as List).map((j) => NoteLink.fromJson(j as Map<String, dynamic>)).toList();
   }
 
   // ---- Search ----
 
-  /// Full-text search across things.
-  Future<List<Thing>?> searchThings(
+  /// Full-text search across notes.
+  Future<List<Note>?> searchNotes(
     String query, {
     String? tag,
     int? limit,
@@ -108,55 +132,33 @@ class GraphApiService {
 
     final data = await _get('/search', params);
     if (data == null) return null;
-    return (data as List).map((j) => Thing.fromJson(j as Map<String, dynamic>)).toList();
+    return (data as List).map((j) => Note.fromJson(j as Map<String, dynamic>)).toList();
   }
 
-  // ---- Edges ----
+  // ---- Links ----
 
-  /// Create an edge between two things.
-  Future<ThingEdge?> createEdge(
+  /// Create a link between two notes.
+  Future<NoteLink?> createLink(
     String sourceId,
     String targetId,
     String relationship,
   ) async {
-    final data = await _post('/edges', {
+    final data = await _post('/links', {
       'source_id': sourceId,
       'target_id': targetId,
       'relationship': relationship,
     });
     if (data == null) return null;
-    return ThingEdge.fromJson(data as Map<String, dynamic>);
-  }
-
-  /// Get edges for a thing.
-  Future<List<ThingEdge>?> getEdges(
-    String thingId, {
-    String? relationship,
-    String direction = 'both',
-  }) async {
-    final params = <String, String>{'direction': direction};
-    if (relationship != null) params['relationship'] = relationship;
-    final data = await _get('/things/$thingId/edges', params);
-    if (data == null) return null;
-    return (data as List).map((j) => ThingEdge.fromJson(j as Map<String, dynamic>)).toList();
+    return NoteLink.fromJson(data as Map<String, dynamic>);
   }
 
   // ---- Tags ----
 
-  /// List all tag definitions with usage counts.
-  Future<List<TagDef>?> getTags() async {
+  /// List all tags with usage counts.
+  Future<List<Map<String, dynamic>>?> getTags() async {
     final data = await _get('/tags', {});
     if (data == null) return null;
-    return (data as List).map((j) => TagDef.fromJson(j as Map<String, dynamic>)).toList();
-  }
-
-  // ---- Tools ----
-
-  /// Execute a tool by name.
-  Future<dynamic> executeTool(String name, Map<String, dynamic> params) async {
-    final data = await _post('/tools/$name/execute', params);
-    if (data == null) return null;
-    return (data as Map<String, dynamic>)['result'];
+    return (data as List).map((j) => j as Map<String, dynamic>).toList();
   }
 
   // ---- Storage ----
@@ -186,22 +188,6 @@ class GraphApiService {
       _notifyReachable(false);
       return null;
     }
-  }
-
-  // ---- Registration ----
-
-  /// Register app's builtin tags and tools.
-  Future<bool> register({
-    required String appName,
-    List<Map<String, dynamic>>? tags,
-    List<Map<String, dynamic>>? tools,
-  }) async {
-    final data = await _post('/register', {
-      'app': appName,
-      if (tags != null) 'tags': tags,
-      if (tools != null) 'tools': tools,
-    });
-    return data != null;
   }
 
   // ---- Health ----
@@ -287,6 +273,27 @@ class GraphApiService {
       _notifyReachable(true);
       if (response.statusCode == 200) return jsonDecode(response.body);
       debugPrint('[GraphApiService] DELETE $path: ${response.statusCode}');
+      return null;
+    } catch (e) {
+      debugPrint('[GraphApiService] DELETE $path error: $e');
+      _notifyReachable(false);
+      return null;
+    }
+  }
+
+  Future<dynamic> _deleteWithBody(String path, Map<String, dynamic> body) async {
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      final request = http.Request('DELETE', uri);
+      request.headers.addAll(_headers());
+      request.body = jsonEncode(body);
+      final streamed = await _client.send(request).timeout(_timeout);
+      _notifyReachable(true);
+      if (streamed.statusCode == 200) {
+        final responseBody = await streamed.stream.bytesToString();
+        return jsonDecode(responseBody);
+      }
+      debugPrint('[GraphApiService] DELETE $path: ${streamed.statusCode}');
       return null;
     } catch (e) {
       debugPrint('[GraphApiService] DELETE $path error: $e');

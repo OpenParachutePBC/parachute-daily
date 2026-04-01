@@ -9,6 +9,7 @@ import 'package:parachute/core/providers/backend_health_provider.dart'
     show periodicServerHealthProvider;
 import 'package:parachute/core/providers/connectivity_provider.dart'
     show isServerAvailableProvider, serverReachableOverrideProvider;
+// GraphApiService is available for direct note/link operations if needed.
 import 'package:parachute/core/services/graph_api_service.dart';
 import '../models/journal_entry.dart';
 import '../models/journal_day.dart';
@@ -122,8 +123,6 @@ class _TodayJournalNotifier extends AutoDisposeAsyncNotifier<JournalDay> {
         Future(() async {
           try {
             final api = ref.read(dailyApiServiceProvider);
-            // Register required tags/tools on (re)connect
-            await api.registerApp();
             final queue = await ref.read(pendingQueueProvider.future);
             await queue.flush(api);
             // Also flush pending deletes/edits that queued while offline.
