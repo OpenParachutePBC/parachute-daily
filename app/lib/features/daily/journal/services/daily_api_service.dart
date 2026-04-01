@@ -139,8 +139,8 @@ class DailyApiService {
           final map = att as Map<String, dynamic>;
           final mime = map['mimeType'] as String? ?? '';
           if (mime.startsWith('audio/')) {
-            // Return the full storage URL for playback
-            return '$baseUrl/api/storage/${map['path']}';
+            // Return the relative path — getAudioUrl adds the server prefix
+            return map['path'] as String;
           }
         }
       }

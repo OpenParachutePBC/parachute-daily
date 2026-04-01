@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:parachute/core/services/transcription/audio_service.dart';
+import 'package:parachute/core/providers/app_state_provider.dart' show apiKeyProvider;
 import 'package:parachute/core/providers/voice_input_providers.dart';
 import 'package:parachute/features/daily/recorder/services/live_transcription_service_v3.dart';
 import 'package:parachute/features/daily/recorder/services/recording_post_processing_service.dart';
@@ -61,12 +62,14 @@ Future<void> setTranscriptionMode(TranscriptionMode mode) async {
 final audioServiceProvider = Provider<AudioService>((ref) {
   final service = AudioService();
   // Initialize the service when first accessed
-  // Note: This is async but we don't await - callers should use ensureInitialized() if needed
   service.initialize().catchError((e) {
     debugPrint('[AudioServiceProvider] Initialization error: $e');
   });
 
-  // Dispose when the provider is disposed
+  // Pass API key for authenticated audio downloads
+  final apiKey = ref.watch(apiKeyProvider).valueOrNull;
+  service.apiKey = apiKey;
+
   ref.onDispose(() {
     service.dispose();
   });

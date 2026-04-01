@@ -13,6 +13,9 @@ enum RecordingState { stopped, recording, paused }
 
 class AudioService {
   final AudioRecorder _recorder = AudioRecorder();
+
+  /// API key for authenticating audio downloads from the server.
+  String? apiKey;
   final AudioPlayer _player = AudioPlayer();
 
   AudioService();
@@ -391,7 +394,11 @@ class AudioService {
 
     debugPrint('Downloading audio: $url');
     try {
-      final response = await http.get(Uri.parse(url));
+      final headers = <String, String>{};
+      if (apiKey != null && apiKey!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $apiKey';
+      }
+      final response = await http.get(Uri.parse(url), headers: headers);
       if (response.statusCode != 200) {
         debugPrint('Audio download failed: HTTP ${response.statusCode}');
         return null;
