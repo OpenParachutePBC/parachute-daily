@@ -113,7 +113,20 @@ function migrateFromV2(db: Database.Database): void {
   const alreadyMigrated = hasTable(db, "notes");
   if (alreadyMigrated) return;
 
-  // Create new tables first
+  // Disable FK checks during migration to allow dropping tables freely
+  db.pragma("foreign_keys = OFF");
+
+  // Drop old FTS, triggers, and tables that will be recreated with new schema
+  db.exec("DROP TRIGGER IF EXISTS things_fts_insert");
+  db.exec("DROP TRIGGER IF EXISTS things_fts_delete");
+  db.exec("DROP TRIGGER IF EXISTS things_fts_update");
+  db.exec("DROP TABLE IF EXISTS things_fts");
+
+  // Rename old tags table so we can create the new simplified one
+  // (old tags has display_name, schema_json, etc. — new one is just name)
+  db.exec("ALTER TABLE tags RENAME TO _old_tags");
+
+  // Create new tables
   db.exec(SCHEMA_SQL);
 
   // Migrate things → notes
@@ -122,17 +135,19 @@ function migrateFromV2(db: Database.Database): void {
     SELECT id, content, created_at, updated_at FROM things WHERE status = 'active'
   `);
 
-  // Migrate thing_tags → note_tags (only tag names, drop field values)
-  // First ensure tags exist
+  // Collect tag names from thing_tags, renaming known ones
+  // We insert into the new tags table (which only has a 'name' column)
   db.exec(`
     INSERT OR IGNORE INTO tags (name)
-    SELECT DISTINCT tag_name FROM thing_tags
+    SELECT DISTINCT CASE
+      WHEN tag_name = 'note' THEN 'daily'
+      WHEN tag_name = 'daily-note' THEN 'daily'
+      ELSE tag_name
+    END
+    FROM thing_tags
   `);
 
-  // Rename known tags
-  db.exec(`UPDATE tags SET name = 'daily' WHERE name = 'note'`);
-  db.exec(`UPDATE tags SET name = 'daily' WHERE name = 'daily-note'`);
-
+  // Migrate thing_tags → note_tags
   db.exec(`
     INSERT OR IGNORE INTO note_tags (note_id, tag_name)
     SELECT tt.thing_id, CASE
@@ -151,14 +166,13 @@ function migrateFromV2(db: Database.Database): void {
     WHERE source_id IN (SELECT id FROM notes) AND target_id IN (SELECT id FROM notes)
   `);
 
-  // Drop old tables (order matters for foreign keys)
+  // Drop old tables
   db.exec("DROP TABLE IF EXISTS thing_tags");
   db.exec("DROP TABLE IF EXISTS edges");
   db.exec("DROP TABLE IF EXISTS tools");
-  db.exec("DROP TABLE IF EXISTS things_fts");
-  db.exec("DROP TRIGGER IF EXISTS things_fts_insert");
-  db.exec("DROP TRIGGER IF EXISTS things_fts_delete");
-  db.exec("DROP TRIGGER IF EXISTS things_fts_update");
   db.exec("DROP TABLE IF EXISTS things");
-  db.exec("DROP TABLE IF EXISTS tags"); // Will be recreated by SCHEMA_SQL with just name
+  db.exec("DROP TABLE IF EXISTS _old_tags");
+
+  // Re-enable FK checks
+  db.pragma("foreign_keys = ON");
 }
