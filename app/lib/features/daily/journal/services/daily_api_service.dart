@@ -94,14 +94,60 @@ class DailyApiService {
 
       onReachabilityChanged?.call(true);
       final data = jsonDecode(response.body) as List<dynamic>;
-      return data
-          .map((json) => _noteToEntry(json as Map<String, dynamic>))
-          .toList();
+      final entries = <JournalEntry>[];
+      for (final json in data) {
+        final note = json as Map<String, dynamic>;
+        final entry = _noteToEntry(note);
+        // Fetch attachments for voice notes to get audio path
+        if (entry.type == JournalEntryType.voice) {
+          final audioPath = await _getAudioPath(entry.id);
+          if (audioPath != null) {
+            entries.add(JournalEntry(
+              id: entry.id,
+              title: entry.title,
+              content: entry.content,
+              type: entry.type,
+              createdAt: entry.createdAt,
+              audioPath: audioPath,
+              durationSeconds: entry.durationSeconds,
+              isPendingTranscription: entry.isPendingTranscription,
+              serverTranscriptionStatus: entry.serverTranscriptionStatus,
+            ));
+            continue;
+          }
+        }
+        entries.add(entry);
+      }
+      return entries;
     } catch (e) {
       debugPrint('[DailyApiService] getEntries error (offline?): $e');
       onReachabilityChanged?.call(false);
       return null;
     }
+  }
+
+  /// Fetch the first audio attachment path for a note.
+  Future<String?> _getAudioPath(String noteId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/notes/$noteId/attachments');
+      final response = await _client
+          .get(uri, headers: _headers)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as List<dynamic>;
+        for (final att in data) {
+          final map = att as Map<String, dynamic>;
+          final mime = map['mimeType'] as String? ?? '';
+          if (mime.startsWith('audio/')) {
+            // Return the full storage URL for playback
+            return '$baseUrl/api/storage/${map['path']}';
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[DailyApiService] _getAudioPath error: $e');
+    }
+    return null;
   }
 
   /// Create a new entry on the server.
