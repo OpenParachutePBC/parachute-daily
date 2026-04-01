@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:parachute/core/config/app_config.dart';
 import 'package:parachute/core/theme/design_tokens.dart';
 import 'package:parachute/core/providers/app_state_provider.dart'
-    show serverUrlProvider;
+    show serverUrlProvider, apiKeyProvider;
 import 'package:parachute/core/providers/feature_flags_provider.dart';
 import 'package:parachute/core/services/backend_health_service.dart';
 
@@ -17,16 +17,19 @@ class ServerSettingsSection extends ConsumerStatefulWidget {
 
 class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
   final _serverUrlController = TextEditingController();
+  final _apiKeyController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _loadServerUrl();
+    _loadApiKey();
   }
 
   @override
   void dispose() {
     _serverUrlController.dispose();
+    _apiKeyController.dispose();
     super.dispose();
   }
 
@@ -35,6 +38,13 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
     final serverUrl = await featureFlags.getAiServerUrl();
     if (mounted) {
       _serverUrlController.text = serverUrl;
+    }
+  }
+
+  Future<void> _loadApiKey() async {
+    final apiKey = ref.read(apiKeyProvider).valueOrNull;
+    if (mounted && apiKey != null) {
+      _apiKeyController.text = apiKey;
     }
   }
 
@@ -72,6 +82,19 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _saveApiKey() async {
+    final key = _apiKeyController.text.trim();
+    await ref.read(apiKeyProvider.notifier).setApiKey(key.isEmpty ? null : key);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(key.isEmpty ? 'API key cleared' : 'API key saved'),
+          backgroundColor: BrandColors.success,
+        ),
+      );
     }
   }
 
@@ -200,6 +223,26 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
           ),
           keyboardType: TextInputType.url,
           onSubmitted: (_) => _saveServerUrl(),
+        ),
+        SizedBox(height: Spacing.md),
+
+        TextField(
+          controller: _apiKeyController,
+          decoration: InputDecoration(
+            labelText: 'API Key',
+            hintText: 'para_...',
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.key),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.clear),
+              onPressed: () {
+                _apiKeyController.clear();
+                _saveApiKey();
+              },
+            ),
+          ),
+          obscureText: true,
+          onSubmitted: (_) => _saveApiKey(),
         ),
         SizedBox(height: Spacing.lg),
 
