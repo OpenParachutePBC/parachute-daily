@@ -6,6 +6,7 @@ import { createStore } from "./db.js";
 import { authMiddleware, authRoutes, getAuthMode } from "./auth.js";
 import { TranscriptionService } from "./transcription.js";
 import { transcribeRoutes } from "./routes/transcribe.js";
+import { mcpRoutes } from "./mcp-http.js";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -50,6 +51,9 @@ app.route("/api/auth", authRoutes());
 
 // Transcription route
 app.route("/api/transcribe", transcribeRoutes(store, transcription, ASSETS_DIR));
+
+// MCP over Streamable HTTP
+app.route("/mcp", mcpRoutes(store.db));
 
 // Mount API routes
 const routes = createRoutes(store, ASSETS_DIR);
