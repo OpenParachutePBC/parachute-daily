@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:parachute/core/services/transcription/audio_service.dart';
 import 'package:parachute/core/providers/app_state_provider.dart' show apiKeyProvider;
@@ -10,6 +11,8 @@ import 'package:parachute/features/daily/recorder/services/recording_post_proces
 // Settings keys
 const String _autoEnhanceKey = 'auto_enhance';
 const String _transcriptionModeKey = 'transcription_mode';
+const String _transcriptionServiceUrlKey = 'transcription_service_url';
+const String _transcriptionServiceApiKeyKey = 'transcription_service_api_key';
 
 /// Transcription mode: where voice entries get transcribed.
 ///
@@ -50,6 +53,73 @@ Future<void> setTranscriptionMode(TranscriptionMode mode) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString(_transcriptionModeKey, mode.name);
 }
+
+/// Provider for transcription service URL (external Whisper-compatible endpoint)
+final transcriptionServiceUrlProvider = FutureProvider<String?>((ref) async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getString(_transcriptionServiceUrlKey);
+});
+
+/// Set transcription service URL
+Future<void> setTranscriptionServiceUrl(String? url) async {
+  final prefs = await SharedPreferences.getInstance();
+  if (url != null && url.isNotEmpty) {
+    await prefs.setString(_transcriptionServiceUrlKey, url);
+  } else {
+    await prefs.remove(_transcriptionServiceUrlKey);
+  }
+}
+
+/// Notifier for transcription service API key with secure storage.
+///
+/// Uses FlutterSecureStorage (Keychain on iOS/macOS, EncryptedSharedPreferences
+/// on Android) — same pattern as the vault API key in ApiKeyNotifier.
+/// Automatically migrates keys from the old SharedPreferences storage.
+class TranscriptionApiKeyNotifier extends AsyncNotifier<String?> {
+  static const _secureStorage = FlutterSecureStorage();
+
+  @override
+  Future<String?> build() async {
+    // Try secure storage first
+    final secureKey = await _secureStorage.read(key: _transcriptionServiceApiKeyKey);
+    if (secureKey != null) return secureKey;
+
+    // Migrate from SharedPreferences if present
+    final prefs = await SharedPreferences.getInstance();
+    final legacyKey = prefs.getString(_transcriptionServiceApiKeyKey);
+    if (legacyKey != null) {
+      await _secureStorage.write(key: _transcriptionServiceApiKeyKey, value: legacyKey);
+      await prefs.remove(_transcriptionServiceApiKeyKey);
+      debugPrint('[TranscriptionApiKey] Migrated from SharedPreferences to secure storage');
+      return legacyKey;
+    }
+
+    return null;
+  }
+
+  Future<void> setApiKey(String? key) async {
+    if (key != null && key.isNotEmpty) {
+      await _secureStorage.write(key: _transcriptionServiceApiKeyKey, value: key);
+      state = AsyncData(key);
+    } else {
+      await _secureStorage.delete(key: _transcriptionServiceApiKeyKey);
+      state = const AsyncData(null);
+    }
+  }
+}
+
+/// Provider for transcription service API key (secure storage)
+final transcriptionServiceApiKeyProvider =
+    AsyncNotifierProvider<TranscriptionApiKeyNotifier, String?>(() {
+  return TranscriptionApiKeyNotifier();
+});
+
+/// Whether a transcription service URL is configured (non-empty)
+final isTranscriptionServiceConfiguredProvider = Provider<bool>((ref) {
+  final urlAsync = ref.watch(transcriptionServiceUrlProvider);
+  final url = urlAsync.valueOrNull;
+  return url != null && url.isNotEmpty;
+});
 
 /// Provider for AudioService
 ///

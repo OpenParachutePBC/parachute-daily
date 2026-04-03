@@ -22,6 +22,7 @@ import 'features/daily/home/screens/home_screen.dart';
 import 'features/daily/recorder/providers/omi_providers.dart';
 import 'features/daily/journal/providers/journal_providers.dart';
 import 'features/digest/screens/digest_screen.dart';
+import 'features/digest/providers/digest_providers.dart';
 import 'features/docs/screens/docs_screen.dart';
 import 'features/settings/screens/settings_screen.dart';
 import 'features/onboarding/screens/onboarding_screen.dart';
@@ -261,13 +262,33 @@ class _DailyShellState extends ConsumerState<_DailyShell> with WidgetsBindingObs
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTab,
         onDestinationSelected: (i) => setState(() => _currentTab = i),
-        destinations: _tabs
-            .map((t) => NavigationDestination(
-                  icon: Icon(t.icon),
-                  selectedIcon: Icon(t.selectedIcon),
-                  label: t.label,
-                ))
-            .toList(),
+        destinations: _tabs.asMap().entries.map((entry) {
+          final t = entry.value;
+          final isDigest = entry.key == 0;
+
+          if (isDigest) {
+            final count = ref.watch(digestCountProvider);
+            return NavigationDestination(
+              icon: Badge(
+                isLabelVisible: count > 0,
+                label: Text('$count'),
+                child: Icon(t.icon),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: count > 0,
+                label: Text('$count'),
+                child: Icon(t.selectedIcon),
+              ),
+              label: t.label,
+            );
+          }
+
+          return NavigationDestination(
+            icon: Icon(t.icon),
+            selectedIcon: Icon(t.selectedIcon),
+            label: t.label,
+          );
+        }).toList(),
       ),
     );
   }
