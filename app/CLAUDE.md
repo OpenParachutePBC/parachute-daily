@@ -14,7 +14,7 @@ User → Flutter App → GraphApiService → Parachute Daily Server (port 1940)
    Local SQLite cache                    SQLite database
    (offline journal)                     (Notes, Tags, Links, Attachments)
                                                  ↓
-                                         MCP stdio server
+                                         MCP endpoint (/mcp)
                                          (Claude / AI agents)
 ```
 

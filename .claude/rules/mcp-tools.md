@@ -24,10 +24,11 @@
 - `date_to`: exclusive (`<`)
 - To get all of March: `date_from: "2026-03-01"`, `date_to: "2026-04-01"`
 
-## Transports
+## Transport
 
-- **HTTP**: `POST /mcp` on the Hono server (port 1940), session-based
-- **stdio**: `npx tsx src/mcp-stdio.ts`, for direct Claude integration
+MCP is served over Streamable HTTP at `POST /mcp` on the Hono server (port 1940). Session-based with `mcp-session-id` headers. Auth follows the server's middleware (localhost bypasses, remote needs API key).
+
+Setup: `claude mcp add parachute-daily --transport http --url http://localhost:1940/mcp`
 
 ## When Modifying Tools
 
