@@ -11,6 +11,8 @@ import 'package:parachute/core/providers/backend_health_provider.dart' show serv
 import 'package:parachute/core/providers/app_state_provider.dart' show apiKeyProvider;
 import 'package:parachute/core/providers/feature_flags_provider.dart' show aiServerUrlProvider;
 import 'package:parachute/core/providers/connectivity_provider.dart' show isServerAvailableProvider;
+import 'package:parachute/core/models/thing.dart';
+import 'package:parachute/core/services/note_local_cache.dart';
 import 'package:parachute/core/services/tag_service.dart' show TagInfo, tagServiceProvider;
 import '../../recorder/providers/service_providers.dart';
 import '../models/entry_metadata.dart' show TranscriptionStatus;
@@ -346,25 +348,27 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
         _cachedJournal = (_cachedJournal ?? JournalDay.empty(date)).addEntry(entry);
         _shouldScrollToBottom = true;
       });
-      // Write to SQLite cache immediately so Phase 1 of the next provider load
-      // includes this entry — prevents the new entry flashing away when the
-      // cache-first read fires before the server fetch completes.
-      final cache = await ref.read(journalLocalCacheProvider.future);
-      final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      final existing = cache.getEntries(dateStr);
-      if (!existing.any((e) => e.id == entry.id)) {
-        cache.putEntries(dateStr, [...existing, entry]);
-      }
+      // Write to cache immediately so Phase 1 of the next provider load
+      // includes this entry.
+      final cache = await ref.read(noteLocalCacheProvider.future);
+      final note = Note(
+        id: entry.id,
+        content: entry.content,
+        createdAt: entry.createdAt,
+        tags: entry.tags ?? ['daily'],
+      );
+      cache.putNotes([note]);
     } else {
-      // Offline — queue for later upload and show as pending
-      final queue = await ref.read(pendingQueueProvider.future);
+      // Offline — save to cache as pending_create
+      final cache = await ref.read(noteLocalCacheProvider.future);
       final localId = 'pending-${DateTime.now().millisecondsSinceEpoch}';
-      final pending = await queue.enqueue(
-        localId: localId,
-        content: content,
-        type: _entryTypeString(type),
-        audioPath: audioPath,
-        imagePath: imagePath,
+      final tags = <String>['daily'];
+      if (type == JournalEntryType.voice) tags.add('voice');
+      final pendingNote = Note(id: localId, content: content, createdAt: DateTime.now(), tags: tags);
+      cache.insertPendingCreate(pendingNote, audioPath: audioPath);
+      final pending = JournalEntry(
+        id: localId, content: content, title: '', createdAt: DateTime.now(),
+        type: type, audioPath: audioPath, isPending: true,
         durationSeconds: durationSeconds,
       );
       if (!mounted) return;
@@ -410,15 +414,16 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     String? imagePath,
     int? durationSeconds,
   }) async {
-    // Step 1: Always save to pending queue first — content is now safe
-    final queue = await ref.read(pendingQueueProvider.future);
+    // Step 1: Save to cache as pending_create — content is now safe
+    final cache = await ref.read(noteLocalCacheProvider.future);
     final localId = 'pending-${DateTime.now().millisecondsSinceEpoch}';
-    final pending = await queue.enqueue(
-      localId: localId,
-      content: content,
-      type: _entryTypeString(type),
-      audioPath: audioPath,
-      imagePath: imagePath,
+    final tags = <String>['daily'];
+    if (type == JournalEntryType.voice) tags.add('voice');
+    final pendingNote = Note(id: localId, content: content, createdAt: DateTime.now(), tags: tags);
+    cache.insertPendingCreate(pendingNote, audioPath: audioPath);
+    final pending = JournalEntry(
+      id: localId, content: content, title: '', createdAt: DateTime.now(),
+      type: type, audioPath: audioPath, isPending: true,
       durationSeconds: durationSeconds,
     );
     if (!mounted) return;
@@ -433,7 +438,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     // Step 2: Try server POST (only if online)
     final isAvailable = ref.read(isServerAvailableProvider);
     if (!isAvailable) {
-      debugPrint('[JournalScreen] Offline — entry safe in queue ($localId)');
+      debugPrint('[JournalScreen] Offline — entry safe in cache ($localId)');
       if (!mounted) return;
       ref.invalidate(selectedJournalProvider);
       ref.read(journalRefreshTriggerProvider.notifier).state++;
@@ -453,17 +458,14 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     );
 
     if (entry != null) {
-      // Success — remove from pending queue and replace with server entry
-      await queue.remove(localId);
+      // Success — remove pending and cache server note
+      cache.removeNote(localId);
       if (!mounted) return;
-
-      // Write server entry to local cache
-      final cache = await ref.read(journalLocalCacheProvider.future);
-      final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      final existing = cache.getEntries(dateStr);
-      if (!existing.any((e) => e.id == entry.id)) {
-        cache.putEntries(dateStr, [...existing, entry]);
-      }
+      final serverNote = Note(
+        id: entry.id, content: entry.content,
+        createdAt: entry.createdAt, tags: entry.tags ?? ['daily'],
+      );
+      cache.putNotes([serverNote]);
 
       // Replace pending entry in UI with server version
       setState(() {
@@ -524,16 +526,18 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     final isAvailable = ref.read(isServerAvailableProvider);
     if (!isAvailable) {
       debugPrint('[JournalScreen] Offline: queueing voice entry...');
-      final queue = await ref.read(pendingQueueProvider.future);
-      final entry = await queue.enqueue(
-        localId: _generateLocalId(),
-        content: '', // Voice entries have no text content initially
-        type: 'voice',
-        audioPath: localAudioPath,
-        durationSeconds: duration,
+      final cache = await ref.read(noteLocalCacheProvider.future);
+      final localId = _generateLocalId();
+      final pendingNote = Note(
+        id: localId, content: '', createdAt: DateTime.now(),
+        tags: ['daily', 'voice'],
       );
-
-      // Add to cache for immediate display
+      cache.insertPendingCreate(pendingNote, audioPath: localAudioPath);
+      final entry = JournalEntry(
+        id: localId, content: '', title: '', createdAt: DateTime.now(),
+        type: JournalEntryType.voice, audioPath: localAudioPath,
+        isPending: true, durationSeconds: duration,
+      );
       await _appendEntryToCache(
         entry,
         content: '',
@@ -640,7 +644,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
         }
       }
     } else {
-      // Offline: queue with staged local path — PendingEntryQueue will upload on reconnect
+      // Offline: save with staged local path — will upload on reconnect
       debugPrint('[JournalScreen] Offline — voice entry queued with staged audio');
       await _appendEntryToCache(
         null,
@@ -1223,13 +1227,9 @@ ref.read(journalScreenStateProvider.notifier).completeTranscription(entry.id);
             if (!mounted) return;
             if (serverUpdated == null) {
               // Server unreachable — queue the edit for retry.
-              final cache = await ref.read(journalLocalCacheProvider.future);
+              final cache = await ref.read(noteLocalCacheProvider.future);
               if (!mounted) return;
-              cache.markForEdit(
-                updatedEntry.id,
-                content: updatedEntry.content,
-                title: updatedEntry.title,
-              );
+              cache.markForEdit(updatedEntry.id, content: updatedEntry.content);
             }
 
             // Sync tag changes to graph — best-effort alongside metadata.
@@ -1400,7 +1400,7 @@ ref.read(journalScreenStateProvider.notifier).completeTranscription(entry.id);
 
       // Mark as pending_delete immediately — removes from cache and hides from UI.
       // This makes deletion feel instant whether we're online or offline.
-      final cache = await ref.read(journalLocalCacheProvider.future);
+      final cache = await ref.read(noteLocalCacheProvider.future);
       cache.markForDelete(entry.id);
 
       if (mounted && _cachedJournal != null) {
@@ -1415,7 +1415,7 @@ ref.read(journalScreenStateProvider.notifier).completeTranscription(entry.id);
       final api = ref.read(dailyApiServiceProvider);
       final ok = await api.deleteEntry(entry.id);
       if (ok) {
-        cache.removeEntry(entry.id);
+        cache.removeNote(entry.id);
         debugPrint('[JournalScreen] Entry deleted from server');
       } else {
         debugPrint('[JournalScreen] Delete queued for retry (offline or server error)');
