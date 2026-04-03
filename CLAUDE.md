@@ -44,11 +44,8 @@ See `.claude/rules/mcp-tools.md` for detailed params and date range semantics.
 ## Running
 
 ```bash
-# Server (port 1940)
+# Server (port 1940, includes MCP at /mcp)
 cd local && npx tsx watch src/server.ts
-
-# MCP stdio (for Claude)
-cd local && npx tsx src/mcp-stdio.ts
 
 # Flutter app
 cd app && flutter run -d macos       # desktop
@@ -69,10 +66,12 @@ Feature branches + PRs for all changes. Run all tests before committing. See `.c
 ```
 Flutter App  →  HTTP API (:1940)  →  SQLite (notes/tags/links)
                                           ↑
-Claude/AI    →  MCP stdio server  ────────┘
+Claude/AI    →  MCP (/mcp)  ──────────────┘
 ```
 
 Server at `~/.parachute/daily.db`. Assets at `~/.parachute/daily/assets/`. Auth via API keys in `~/.parachute/server.yaml` (localhost bypasses auth).
+
+MCP setup for Claude Code: `claude mcp add parachute-daily --transport http --url http://localhost:1940/mcp`
 
 ## App Views (Three Tabs)
 

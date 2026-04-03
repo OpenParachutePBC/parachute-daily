@@ -19,10 +19,6 @@ switch (command) {
     await import("./server.js");
     break;
 
-  case "mcp":
-    await import("./mcp-stdio.js");
-    break;
-
   case "init":
     await runInit();
     break;
@@ -68,16 +64,17 @@ async function runInit() {
 
 async function runStatus() {
   const port = process.env.PORT ?? "1940";
-  const url = `http://localhost:${port}/api/health`;
+  const baseUrl = `http://localhost:${port}`;
 
   try {
-    const res = await fetch(url);
+    const res = await fetch(`${baseUrl}/api/health`);
     if (res.ok) {
       const data = await res.json() as Record<string, unknown>;
       console.log(`Server:        running on :${port}`);
       console.log(`Version:       ${data.version}`);
       console.log(`Auth mode:     ${data.auth_mode}`);
       console.log(`Transcription: ${data.transcription_available ? "available" : "not available"}`);
+      console.log(`MCP endpoint:  ${baseUrl}/mcp`);
     } else {
       console.log(`Server responded with ${res.status}`);
     }
@@ -92,9 +89,12 @@ Parachute — personal graph server
 
 Usage:
   parachute serve     Start the HTTP server (default :1940)
-  parachute mcp       Start the MCP stdio server (for Claude)
   parachute init      Initialize database and show status
   parachute status    Check if server is running
+
+The server includes an MCP endpoint at /mcp for AI agent access.
+Add it to Claude Code:
+  claude mcp add parachute-daily --transport http --url http://localhost:1940/mcp
 
 Environment:
   PORT                 Server port (default: 1940)
