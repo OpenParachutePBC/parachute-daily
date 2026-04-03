@@ -7,7 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:parachute/core/config/app_config.dart';
 import 'package:parachute/core/theme/design_tokens.dart';
-import 'package:parachute/core/providers/backend_health_provider.dart' show serverTranscriptionAvailableProvider;
+import 'package:parachute/core/providers/backend_health_provider.dart'
+    show serverTranscriptionAvailableProvider, transcriptionApiServiceProvider;
 import 'package:parachute/core/providers/app_state_provider.dart' show apiKeyProvider;
 import 'package:parachute/core/providers/feature_flags_provider.dart' show aiServerUrlProvider;
 import 'package:parachute/core/providers/connectivity_provider.dart' show isServerAvailableProvider;
@@ -520,75 +521,33 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     await _addVoiceEntryLocally(transcript, localAudioPath, duration);
   }
 
-  /// Upload audio to server for transcription + cleanup. Returns true on success.
+  /// Transcribe audio via external transcription service, then save entry. Returns true on success.
   Future<bool> _addVoiceEntryViaServer(String localAudioPath, int duration) async {
-    // Check connectivity — if offline, queue the voice entry instead
-    final isAvailable = ref.read(isServerAvailableProvider);
-    if (!isAvailable) {
-      debugPrint('[JournalScreen] Offline: queueing voice entry...');
-      final cache = await ref.read(noteLocalCacheProvider.future);
-      final localId = _generateLocalId();
-      final pendingNote = Note(
-        id: localId, content: '', createdAt: DateTime.now(),
-        tags: ['daily', 'voice'],
-      );
-      cache.insertPendingCreate(pendingNote, audioPath: localAudioPath);
-      final entry = JournalEntry(
-        id: localId, content: '', title: '', createdAt: DateTime.now(),
-        type: JournalEntryType.voice, audioPath: localAudioPath,
-        isPending: true, durationSeconds: duration,
-      );
-      await _appendEntryToCache(
-        entry,
-        content: '',
-        type: JournalEntryType.voice,
-        audioPath: localAudioPath,
-        durationSeconds: duration,
-      );
-
-      // Don't delete the audio file yet — it's needed when the entry syncs
-      return true;
-    }
-
-    debugPrint('[JournalScreen] Uploading voice entry to server for transcription...');
-    final api = ref.read(dailyApiServiceProvider);
-
-    final entry = await api.uploadVoiceEntry(
-      audioFile: File(localAudioPath),
-      durationSeconds: duration,
-    );
-    if (!mounted) return false;
-
-    if (entry == null) {
-      debugPrint('[JournalScreen] Server voice upload failed');
+    final transcriptionService = ref.read(transcriptionApiServiceProvider);
+    if (transcriptionService == null) {
+      debugPrint('[JournalScreen] No transcription service configured');
       return false;
     }
 
-    // Cache the entry (with processing status — no text yet)
-    await _appendEntryToCache(
-      entry,
-      content: '',
-      type: JournalEntryType.voice,
-      audioPath: entry.audioPath,
-      durationSeconds: duration,
-    );
-
-    // Clean up local audio — server has its own copy
+    debugPrint('[JournalScreen] Transcribing via external service...');
     try {
-      await File(localAudioPath).delete();
+      final transcript = await transcriptionService.transcribe(localAudioPath);
+      if (!mounted) return false;
+
+      if (transcript.isEmpty) {
+        debugPrint('[JournalScreen] External transcription returned empty text');
+        return false;
+      }
+
+      debugPrint('[JournalScreen] External transcription complete: ${transcript.length} chars');
+
+      // Now save the entry using the local flow (upload audio to vault if online, create entry with transcript)
+      await _addVoiceEntryLocally(transcript, localAudioPath, duration);
+      return true;
     } catch (e) {
-      debugPrint('[JournalScreen] Failed to delete staged audio: $e');
+      debugPrint('[JournalScreen] External transcription failed: $e');
+      return false;
     }
-
-    // Start polling for transcription completion
-    _startPollingEntry(entry.id);
-
-    return true;
-  }
-
-  /// Generate a unique local ID for pending entries
-  String _generateLocalId() {
-    return 'local_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecond}';
   }
 
   /// Original local flow: upload audio asset, create entry, let on-device transcription handle it.
@@ -828,10 +787,24 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     }
   }
 
-  /// Re-transcribe via server: upload audio with replace_entry_id, let server pipeline handle it.
+  /// Re-transcribe via external transcription service, then update entry on server.
   Future<void> _retranscribeViaServer(JournalEntry entry, String audioPath) async {
+    final transcriptionService = ref.read(transcriptionApiServiceProvider);
+    if (transcriptionService == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('No transcription service configured'),
+            backgroundColor: BrandColors.error,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
     ref.read(journalScreenStateProvider.notifier).startTranscription(entry.id);
-    debugPrint('[JournalScreen] Re-transcribing entry ${entry.id} via server');
+    debugPrint('[JournalScreen] Re-transcribing entry ${entry.id} via external service');
 
     File? tempAudioFile;
     try {
@@ -841,47 +814,48 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
       if (audioFile.path != audioPath) tempAudioFile = audioFile;
 
       if (!mounted) return;
-      final api = ref.read(dailyApiServiceProvider);
 
-      final result = await api.uploadVoiceEntry(
-        audioFile: audioFile,
-        durationSeconds: entry.durationSeconds ?? 0,
-        replaceEntryId: entry.id,
-      );
+      final transcript = await transcriptionService.transcribe(audioFile.path);
       if (!mounted) return;
 
-      if (result == null) {
-        throw Exception('Server upload failed');
-      }
+      if (transcript.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No speech detected in recording'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        // Update the entry on the server with the new transcript
+        final api = ref.read(dailyApiServiceProvider);
+        final updatedEntry = entry.copyWith(content: transcript);
+        final serverUpdated = await api.updateEntry(entry.id, content: transcript);
+        if (serverUpdated == null) throw Exception('Server unreachable — transcript not saved');
 
-      // Update local cache to show processing state
-      final updatedEntry = entry.copyWith(
-        content: '',
-        serverTranscriptionStatus: TranscriptionStatus.processing,
-      );
-      if (_cachedJournal != null) {
-        setState(() {
-          _cachedJournal = _cachedJournal!.updateEntry(updatedEntry);
-        });
-      }
+        if (mounted && _cachedJournal != null) {
+          setState(() {
+            _cachedJournal = _cachedJournal!.updateEntry(updatedEntry);
+          });
+          ref.invalidate(selectedJournalProvider);
+        }
 
-      // Start polling for transcription + cleanup completion
-      _startPollingEntry(entry.id);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Re-transcribing on server...'),
-            backgroundColor: BrandColors.turquoise,
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Re-transcription complete'),
+              backgroundColor: BrandColors.success,
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+              margin: const EdgeInsets.all(16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          );
+        }
       }
     } catch (e) {
-      debugPrint('[JournalScreen] Server re-transcribe failed: $e');
+      debugPrint('[JournalScreen] External re-transcribe failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -893,7 +867,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
       }
     } finally {
       if (mounted) {
-ref.read(journalScreenStateProvider.notifier).completeTranscription(entry.id);
+        ref.read(journalScreenStateProvider.notifier).completeTranscription(entry.id);
       }
       try { await tempAudioFile?.delete(); } catch (_) {}
     }

@@ -58,8 +58,9 @@ class _TranscriptionServiceSectionState
 
   Future<void> _saveApiKey({bool showSnackbar = true}) async {
     final key = _apiKeyController.text.trim();
-    await setTranscriptionServiceApiKey(key.isEmpty ? null : key);
-    ref.invalidate(transcriptionServiceApiKeyProvider);
+    await ref.read(transcriptionServiceApiKeyProvider.notifier).setApiKey(
+      key.isEmpty ? null : key,
+    );
     if (showSnackbar && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -110,16 +111,18 @@ class _TranscriptionServiceSectionState
     );
 
     try {
-      final reachable = await service.checkConnection();
+      final result = await service.checkConnection();
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
+        final color = result.authOk
+            ? BrandColors.success
+            : result.reachable
+                ? BrandColors.warning
+                : BrandColors.error;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(reachable
-                ? 'Transcription service connected'
-                : 'Could not reach transcription service'),
-            backgroundColor:
-                reachable ? BrandColors.success : BrandColors.error,
+            content: Text(result.message),
+            backgroundColor: color,
           ),
         );
       }
@@ -148,7 +151,7 @@ class _TranscriptionServiceSectionState
         Row(
           children: [
             Icon(
-              Icons.transcribe,
+              Icons.record_voice_over,
               color: isDark ? BrandColors.nightTurquoise : BrandColors.turquoise,
             ),
             SizedBox(width: Spacing.sm),

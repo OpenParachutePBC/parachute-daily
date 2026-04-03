@@ -49,12 +49,36 @@ final periodicServerHealthProvider = StreamProvider<ServerHealthStatus?>((ref) a
 
 /// Whether an external transcription service is configured and reachable.
 ///
-/// Checks the transcription service URL (Whisper-compatible endpoint).
+/// Checks the transcription service URL and periodically verifies reachability.
 /// Used by the recording flow to decide server vs local transcription path.
 final serverTranscriptionAvailableProvider = Provider<bool>((ref) {
-  final urlAsync = ref.watch(transcriptionServiceUrlProvider);
-  final url = urlAsync.valueOrNull;
-  return url != null && url.isNotEmpty;
+  final reachable = ref.watch(transcriptionServiceReachableProvider);
+  return reachable.valueOrNull ?? false;
+});
+
+/// Periodic reachability check for the transcription service.
+final transcriptionServiceReachableProvider = StreamProvider<bool>((ref) async* {
+  final url = ref.watch(transcriptionServiceUrlProvider).valueOrNull;
+  if (url == null || url.isEmpty) {
+    yield false;
+    return;
+  }
+
+  final service = ref.watch(transcriptionApiServiceProvider);
+  if (service == null) {
+    yield false;
+    return;
+  }
+
+  // Initial check
+  final result = await service.checkConnection();
+  yield result.reachable;
+
+  // Re-check every 30 seconds
+  await for (final _ in Stream.periodic(const Duration(seconds: 30))) {
+    final r = await service.checkConnection();
+    yield r.reachable;
+  }
 });
 
 /// Provider for a TranscriptionApiService instance built from current settings.

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:parachute/core/services/transcription/audio_service.dart';
 import 'package:parachute/core/providers/app_state_provider.dart' show apiKeyProvider;
@@ -69,21 +70,49 @@ Future<void> setTranscriptionServiceUrl(String? url) async {
   }
 }
 
-/// Provider for transcription service API key
-final transcriptionServiceApiKeyProvider = FutureProvider<String?>((ref) async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getString(_transcriptionServiceApiKeyKey);
-});
+/// Notifier for transcription service API key with secure storage.
+///
+/// Uses FlutterSecureStorage (Keychain on iOS/macOS, EncryptedSharedPreferences
+/// on Android) — same pattern as the vault API key in ApiKeyNotifier.
+/// Automatically migrates keys from the old SharedPreferences storage.
+class TranscriptionApiKeyNotifier extends AsyncNotifier<String?> {
+  static const _secureStorage = FlutterSecureStorage();
 
-/// Set transcription service API key
-Future<void> setTranscriptionServiceApiKey(String? key) async {
-  final prefs = await SharedPreferences.getInstance();
-  if (key != null && key.isNotEmpty) {
-    await prefs.setString(_transcriptionServiceApiKeyKey, key);
-  } else {
-    await prefs.remove(_transcriptionServiceApiKeyKey);
+  @override
+  Future<String?> build() async {
+    // Try secure storage first
+    final secureKey = await _secureStorage.read(key: _transcriptionServiceApiKeyKey);
+    if (secureKey != null) return secureKey;
+
+    // Migrate from SharedPreferences if present
+    final prefs = await SharedPreferences.getInstance();
+    final legacyKey = prefs.getString(_transcriptionServiceApiKeyKey);
+    if (legacyKey != null) {
+      await _secureStorage.write(key: _transcriptionServiceApiKeyKey, value: legacyKey);
+      await prefs.remove(_transcriptionServiceApiKeyKey);
+      debugPrint('[TranscriptionApiKey] Migrated from SharedPreferences to secure storage');
+      return legacyKey;
+    }
+
+    return null;
+  }
+
+  Future<void> setApiKey(String? key) async {
+    if (key != null && key.isNotEmpty) {
+      await _secureStorage.write(key: _transcriptionServiceApiKeyKey, value: key);
+      state = AsyncData(key);
+    } else {
+      await _secureStorage.delete(key: _transcriptionServiceApiKeyKey);
+      state = const AsyncData(null);
+    }
   }
 }
+
+/// Provider for transcription service API key (secure storage)
+final transcriptionServiceApiKeyProvider =
+    AsyncNotifierProvider<TranscriptionApiKeyNotifier, String?>(() {
+  return TranscriptionApiKeyNotifier();
+});
 
 /// Whether a transcription service URL is configured (non-empty)
 final isTranscriptionServiceConfiguredProvider = Provider<bool>((ref) {

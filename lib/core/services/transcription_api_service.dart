@@ -71,10 +71,9 @@ class TranscriptionApiService {
   }
 
   /// Check if the transcription endpoint is reachable.
-  /// Tries a lightweight request to see if the server responds.
-  Future<bool> checkConnection() async {
+  /// Returns a [ConnectionResult] with status and message.
+  Future<ConnectionResult> checkConnection() async {
     try {
-      // Try the models endpoint first (most Whisper-compatible servers support this)
       final uri = Uri.parse('$baseUrl/v1/models');
       final request = http.Request('GET', uri);
       if (apiKey != null && apiKey!.isNotEmpty) {
@@ -86,17 +85,42 @@ class TranscriptionApiService {
       );
       final response = await http.Response.fromStream(streamedResponse);
 
-      // 200 = good, 401/403 = server is there but auth issue (still "reachable")
-      return response.statusCode == 200 ||
-          response.statusCode == 401 ||
-          response.statusCode == 403;
+      if (response.statusCode == 200) {
+        return ConnectionResult.ok('Transcription service connected');
+      } else if (response.statusCode == 401 || response.statusCode == 403) {
+        return ConnectionResult.authError('Server reachable but authentication failed — check your API key');
+      } else {
+        return ConnectionResult.error('Server returned ${response.statusCode}');
+      }
     } catch (e) {
       debugPrint('[TranscriptionApi] Connection check failed: $e');
-      return false;
+      return ConnectionResult.error('Could not reach transcription service');
     }
   }
 
   void dispose() {
     _client.close();
   }
+}
+
+/// Result of a transcription service connection check.
+class ConnectionResult {
+  final bool reachable;
+  final bool authOk;
+  final String message;
+
+  const ConnectionResult._({
+    required this.reachable,
+    required this.authOk,
+    required this.message,
+  });
+
+  factory ConnectionResult.ok(String message) =>
+      ConnectionResult._(reachable: true, authOk: true, message: message);
+
+  factory ConnectionResult.authError(String message) =>
+      ConnectionResult._(reachable: true, authOk: false, message: message);
+
+  factory ConnectionResult.error(String message) =>
+      ConnectionResult._(reachable: false, authOk: false, message: message);
 }
