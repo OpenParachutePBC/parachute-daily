@@ -298,12 +298,13 @@ class DailyApiService {
   }
 
   // ===========================================================================
-  // Backward-compatible aliases (consumers not yet migrated to Note API)
-  // TODO(v3-cache): Remove these once journal_screen.dart and other consumers
-  // are updated to use Note-based methods directly.
+  // JournalEntry convenience methods — thin wrappers over Note API
+  //
+  // These return JournalEntry (the Daily tab's view model) for consumers
+  // like journal_screen.dart that display entries with type/audio/title.
   // ===========================================================================
 
-  /// Alias for [getNotes] — returns JournalEntry for old consumers.
+  /// Fetch entries for a date, converting Notes to JournalEntries.
   Future<List<JournalEntry>?> getEntries({required String date}) async {
     final notes = await getNotes(date: date);
     if (notes == null) return null;
