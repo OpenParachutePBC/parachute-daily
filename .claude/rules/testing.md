@@ -4,12 +4,12 @@
 
 | Package | Command | Type | Time |
 |---------|---------|------|------|
-| app | `cd app && flutter analyze` | static analysis | ~5s |
+| app | `flutter analyze` | static analysis | ~5s |
 
 ## When to Run
 
 - **Always** before committing
-- After modifying `app/lib/` — run flutter analyze
+- After modifying `lib/` — run flutter analyze
 
 ## Test Patterns
 

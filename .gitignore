@@ -1,8 +1,28 @@
-node_modules/
-dist/
-*.db
-*.db-wal
-*.db-shm
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+*.iml
 
-# Claude Code local settings (machine-specific permissions, not shared)
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
+macos/Flutter/ephemeral/
+
+# Android
+android/.gradle/
+android/local.properties
+android/key.properties
+*.jks
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+
+# Claude Code local settings
 .claude/settings.local.json
