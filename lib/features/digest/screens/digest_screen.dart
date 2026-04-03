@@ -8,43 +8,132 @@ import '../providers/digest_providers.dart';
 
 /// Digest tab — inbox of AI-surfaced content.
 ///
-/// Shows notes tagged #digest (excluding #archived). Swipe to archive.
-class DigestScreen extends ConsumerWidget {
+/// Shows notes tagged #digest. Pinned items float to top, grouped by sub-tag.
+/// Archive toggle in header. Swipe to archive/unarchive, long-press to pin.
+class DigestScreen extends ConsumerStatefulWidget {
   const DigestScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final notesAsync = ref.watch(digestNotesProvider);
+  ConsumerState<DigestScreen> createState() => _DigestScreenState();
+}
 
-    return notesAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
-      data: (notes) {
-        if (notes.isEmpty) {
-          return _buildEmpty(context);
-        }
-        return RefreshIndicator(
-          onRefresh: () async {
-            ref.read(digestRefreshTriggerProvider.notifier).state++;
-            await ref.read(digestNotesProvider.future);
-          },
-          child: ListView.separated(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: notes.length,
-            separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
-            itemBuilder: (context, index) => _DigestNoteItem(
-              note: notes[index],
-              onArchived: () {
-                ref.read(digestRefreshTriggerProvider.notifier).state++;
-              },
+class _DigestScreenState extends ConsumerState<DigestScreen> {
+  void _refresh() {
+    ref.read(digestRefreshTriggerProvider.notifier).state++;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final notesAsync = ref.watch(digestNotesProvider);
+    final showArchived = ref.watch(digestShowArchivedProvider);
+
+    return Column(
+      children: [
+        // Header
+        SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('Digest', style: theme.textTheme.headlineSmall),
+                ),
+                // Count badge
+                notesAsync.whenOrNull(
+                      data: (notes) => notes.isNotEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Text(
+                                '${notes.length}',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: isDark
+                                      ? BrandColors.nightTextSecondary
+                                      : BrandColors.driftwood,
+                                ),
+                              ),
+                            )
+                          : null,
+                    ) ??
+                    const SizedBox.shrink(),
+                // Archive toggle
+                IconButton(
+                  icon: Icon(
+                    showArchived ? Icons.inventory_2 : Icons.inventory_2_outlined,
+                    size: 20,
+                  ),
+                  tooltip: showArchived ? 'Hide archived' : 'Show archived',
+                  onPressed: () {
+                    ref.read(digestShowArchivedProvider.notifier).state =
+                        !showArchived;
+                  },
+                ),
+              ],
             ),
           ),
+        ),
+        const Divider(height: 1),
+        // Content
+        Expanded(
+          child: notesAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => _buildError(e),
+            data: (notes) {
+              if (notes.isEmpty) return _buildEmpty(showArchived);
+              return RefreshIndicator(
+                onRefresh: () async {
+                  _refresh();
+                  await ref.read(digestNotesProvider.future);
+                },
+                child: _buildNotesList(notes),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNotesList(List<Note> notes) {
+    final grouped = groupDigestBySubTag(notes);
+    final sortedKeys = grouped.keys.toList()..sort();
+    final showHeaders = sortedKeys.length > 1 ||
+        (sortedKeys.length == 1 && sortedKeys.first.isNotEmpty);
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      itemCount: sortedKeys.length,
+      itemBuilder: (context, sectionIndex) {
+        final label = sortedKeys[sectionIndex];
+        final sectionNotes = grouped[label]!;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showHeaders && label.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: BrandColors.forest,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+              ),
+            ...sectionNotes.map((note) => _DigestCard(
+                  note: note,
+                  onChanged: _refresh,
+                )),
+          ],
         );
       },
     );
   }
 
-  Widget _buildEmpty(BuildContext context) {
+  Widget _buildEmpty(bool showArchived) {
     final theme = Theme.of(context);
     return Center(
       child: Padding(
@@ -58,13 +147,61 @@ class DigestScreen extends ConsumerWidget {
               color: theme.colorScheme.outline,
             ),
             const SizedBox(height: 16),
-            Text('No digests yet', style: theme.textTheme.headlineSmall),
+            Text(
+              showArchived ? 'No digests' : 'No digests yet',
+              style: theme.textTheme.headlineSmall,
+            ),
             const SizedBox(height: 8),
             Text(
-              'AI-surfaced content will appear here as agents create digest notes.',
+              showArchived
+                  ? 'Archived digests will appear here.'
+                  : 'AI-surfaced content will appear here as agents create digest notes.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 24),
+            OutlinedButton.icon(
+              onPressed: _refresh,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Refresh'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildError(Object error) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_off, size: 48, color: BrandColors.error),
+            const SizedBox(height: 16),
+            Text(
+              'Could not load digests',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '$error',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _refresh,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Retry'),
+              style: FilledButton.styleFrom(
+                backgroundColor: BrandColors.turquoise,
               ),
             ),
           ],
@@ -74,19 +211,24 @@ class DigestScreen extends ConsumerWidget {
   }
 }
 
-class _DigestNoteItem extends ConsumerWidget {
-  final Note note;
-  final VoidCallback onArchived;
+// =============================================================================
+// Digest Card
+// =============================================================================
 
-  const _DigestNoteItem({required this.note, required this.onArchived});
+class _DigestCard extends ConsumerWidget {
+  final Note note;
+  final VoidCallback onChanged;
+
+  const _DigestCard({required this.note, required this.onChanged});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final title = note.path ?? '';
-    final preview = note.content.length > 120
-        ? '${note.content.substring(0, 120)}...'
-        : note.content;
+    final preview = _smartTruncate(note.content, 150);
+    final date = note.updatedAt ?? note.createdAt;
+    final isArchived = note.isArchived;
 
     return Dismissible(
       key: ValueKey(note.id),
@@ -94,50 +236,215 @@ class _DigestNoteItem extends ConsumerWidget {
       background: Container(
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
-        color: BrandColors.forest,
-        child: const Icon(Icons.archive_outlined, color: Colors.white),
+        color: isArchived ? BrandColors.turquoise : BrandColors.forest,
+        child: Icon(
+          isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+          color: Colors.white,
+        ),
       ),
       onDismissed: (_) async {
         final api = ref.read(graphApiServiceProvider);
-        await api.tagNote(note.id, ['archived']);
-        onArchived();
+        if (isArchived) {
+          await api.untagNote(note.id, ['archived']);
+        } else {
+          await api.tagNote(note.id, ['archived']);
+        }
+        onChanged();
       },
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        title: Text(
-          title.isNotEmpty ? title : preview,
-          maxLines: title.isNotEmpty ? 1 : 2,
-          overflow: TextOverflow.ellipsis,
-          style: title.isNotEmpty ? theme.textTheme.titleMedium : null,
-        ),
-        subtitle: title.isNotEmpty
-            ? Text(preview, maxLines: 2, overflow: TextOverflow.ellipsis)
-            : null,
-        trailing: Text(
-          _relativeDate(note.createdAt),
-          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-        ),
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => NoteDetailScreen(
-                note: note,
-                onChanged: onArchived,
+      child: GestureDetector(
+        onLongPress: () => _togglePin(ref),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: isDark ? BrandColors.nightSurface : BrandColors.softWhite,
+            borderRadius: BorderRadius.circular(Radii.sm),
+            border: note.isPinned
+                ? Border.all(
+                    color: (isDark ? BrandColors.nightTurquoise : BrandColors.turquoise)
+                        .withValues(alpha: 0.5),
+                    width: 1.5,
+                  )
+                : Border.all(
+                    color: (isDark ? BrandColors.nightTextSecondary : BrandColors.driftwood)
+                        .withValues(alpha: 0.12),
+                  ),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(Radii.sm),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => NoteDetailScreen(
+                      note: note,
+                      onChanged: onChanged,
+                    ),
+                  ),
+                );
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Top row: pin indicator + date + archived badge
+                    Row(
+                      children: [
+                        if (note.isPinned) ...[
+                          Icon(
+                            Icons.push_pin,
+                            size: 14,
+                            color: isDark
+                                ? BrandColors.nightTurquoise
+                                : BrandColors.turquoise,
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        if (isArchived) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: BrandColors.driftwood.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'archived',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: BrandColors.driftwood,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        // Sub-tag chip
+                        ..._buildSubTagChip(theme, isDark),
+                        const Spacer(),
+                        Text(
+                          _relativeDate(date),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: isDark
+                                ? BrandColors.nightTextSecondary
+                                : BrandColors.driftwood,
+                          ),
+                        ),
+                      ],
+                    ),
+                    // Title
+                    if (title.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? BrandColors.nightText : BrandColors.charcoal,
+                        ),
+                      ),
+                    ],
+                    // Content preview
+                    if (preview.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        _stripMarkdown(preview),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: isDark
+                              ? BrandColors.nightTextSecondary
+                              : BrandColors.driftwood,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
 
-  String _relativeDate(DateTime dt) {
+  List<Widget> _buildSubTagChip(ThemeData theme, bool isDark) {
+    final subTag = note.tags.firstWhere(
+      (t) => t.startsWith('digest/'),
+      orElse: () => '',
+    );
+    if (subTag.isEmpty) return [];
+
+    final label = subTag.substring('digest/'.length);
+    return [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+          color: BrandColors.forest.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: BrandColors.forest,
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+      const SizedBox(width: 4),
+    ];
+  }
+
+  Future<void> _togglePin(WidgetRef ref) async {
+    final api = ref.read(graphApiServiceProvider);
+    if (note.isPinned) {
+      await api.untagNote(note.id, ['pinned']);
+    } else {
+      await api.tagNote(note.id, ['pinned']);
+    }
+    onChanged();
+  }
+
+  /// Truncate at a word boundary.
+  static String _smartTruncate(String text, int maxLength) {
+    if (text.length <= maxLength) return text;
+    final truncated = text.substring(0, maxLength);
+    final lastSpace = truncated.lastIndexOf(' ');
+    if (lastSpace > maxLength * 0.6) {
+      return '${truncated.substring(0, lastSpace)}...';
+    }
+    return '$truncated...';
+  }
+
+  /// Strip common markdown syntax for a cleaner preview.
+  static String _stripMarkdown(String text) {
+    return text
+        .replaceAll(RegExp(r'^#{1,6}\s+', multiLine: true), '') // headings
+        .replaceAll(RegExp(r'\*\*(.+?)\*\*'), r'$1') // bold
+        .replaceAll(RegExp(r'\*(.+?)\*'), r'$1') // italic
+        .replaceAll(RegExp(r'`(.+?)`'), r'$1') // inline code
+        .replaceAll(RegExp(r'^\s*[-*+]\s+', multiLine: true), '') // list items
+        .replaceAll(RegExp(r'\[(.+?)\]\(.+?\)'), r'$1') // links
+        .replaceAll(RegExp(r'\n{2,}'), '\n') // collapse blank lines
+        .trim();
+  }
+
+  static String _relativeDate(DateTime dt) {
     final now = DateTime.now();
     final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     if (diff.inDays < 7) return '${diff.inDays}d';
-    final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
     return '${months[dt.month - 1]} ${dt.day}';
   }
 }
