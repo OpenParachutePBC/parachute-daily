@@ -26,94 +26,8 @@ bool get isClientFlavor => appFlavor == 'client';
 bool get isComputerFlavor => appFlavor == 'computer';
 
 // ============================================================================
-// Server Mode (for Computer flavor)
+// Server URL
 // ============================================================================
-
-/// How the Parachute server is run (Computer flavor only)
-///
-/// Currently only bareMetal is supported. Server runs directly on macOS
-/// with Docker containers providing sandboxed execution.
-enum ServerMode {
-  /// Server runs directly on macOS
-  /// Full performance, Docker containers for sandboxing
-  bareMetal,
-}
-
-/// Notifier for server mode preference (Computer flavor)
-class ServerModeNotifier extends AsyncNotifier<ServerMode> {
-  static const _key = 'parachute_server_mode';
-
-  @override
-  Future<ServerMode> build() async {
-    return ServerMode.bareMetal;
-  }
-
-  Future<void> setServerMode(ServerMode mode) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, 'bareMetal');
-    state = AsyncData(mode);
-  }
-}
-
-/// Server mode provider (Computer flavor only)
-final serverModeProvider = AsyncNotifierProvider<ServerModeNotifier, ServerMode>(() {
-  return ServerModeNotifier();
-});
-
-// ============================================================================
-// Custom Computer Path (for developers)
-// ============================================================================
-
-/// Notifier for custom computer path (optional, for developers)
-class CustomBasePathNotifier extends AsyncNotifier<String?> {
-  static const _key = 'parachute_custom_base_path';
-  static const _enabledKey = 'parachute_custom_base_enabled';
-
-  @override
-  Future<String?> build() async {
-    final prefs = await SharedPreferences.getInstance();
-    final enabled = prefs.getBool(_enabledKey) ?? false;
-    if (!enabled) return null;
-    return prefs.getString(_key);
-  }
-
-  Future<void> setCustomPath(String? path, {bool enabled = true}) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (path != null && path.isNotEmpty && enabled) {
-      await prefs.setString(_key, path);
-      await prefs.setBool(_enabledKey, true);
-      state = AsyncData(path);
-    } else {
-      await prefs.setBool(_enabledKey, false);
-      state = const AsyncData(null);
-    }
-  }
-
-  Future<void> disable() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_enabledKey, false);
-    state = const AsyncData(null);
-  }
-}
-
-/// Custom computer path provider (null if using bundled)
-final customBasePathProvider = AsyncNotifierProvider<CustomBasePathNotifier, String?>(() {
-  return CustomBasePathNotifier();
-});
-
-// ============================================================================
-// App Mode
-// ============================================================================
-
-/// App mode — daily-only in v2
-enum AppMode {
-  dailyOnly,
-}
-
-/// Available tabs — daily only in v2
-enum AppTab {
-  daily,
-}
 
 /// Notifier for server URL with persistence
 class ServerUrlNotifier extends AsyncNotifier<String?> {
@@ -186,37 +100,6 @@ class VaultNameNotifier extends AsyncNotifier<String?> {
 /// Selected vault name provider (null = default vault)
 final vaultNameProvider = AsyncNotifierProvider<VaultNameNotifier, String?>(() {
   return VaultNameNotifier();
-});
-
-/// App mode based on flavor and server configuration
-///
-/// - Daily flavor: Always dailyOnly (Chat/Vault not available)
-/// - Full flavor: Full if server configured, dailyOnly if not
-final appModeProvider = Provider<AppMode>((ref) {
-  // Daily-only flavor is always in daily mode regardless of server
-  if (isDailyOnlyFlavor) {
-    return AppMode.dailyOnly;
-  }
-
-  return AppMode.dailyOnly;
-});
-
-/// List of visible tabs — daily only in v2
-final visibleTabsProvider = Provider<List<AppTab>>((ref) {
-  return [AppTab.daily];
-});
-
-/// Current tab index
-final currentTabIndexProvider = StateProvider<int>((ref) => 0);
-
-/// Check if server is configured
-final isServerConfiguredProvider = Provider<bool>((ref) {
-  final serverUrlAsync = ref.watch(serverUrlProvider);
-  return serverUrlAsync.when(
-    data: (url) => url != null && url.isNotEmpty,
-    loading: () => false,
-    error: (_, _) => false,
-  );
 });
 
 /// Notifier for API key with persistence via flutter_secure_storage.
@@ -319,29 +202,18 @@ final appVersionFullProvider = FutureProvider<String>((ref) async {
 // Setup Reset (for testing/troubleshooting)
 // ============================================================================
 
-/// Reset all setup-related state to start fresh
+/// Reset all setup-related state to start fresh.
 ///
-/// This clears:
-/// - Server URL (puts app back in dailyOnly mode)
-/// - Server mode
-/// - Vault path selection
-/// - Onboarding completion flag
-///
-/// Does NOT clear:
-/// - API key (user might want to keep this)
-/// - Custom base path (developer setting)
-/// - Sync mode preferences
+/// Clears server URL, vault name, and onboarding flag.
+/// Does NOT clear API key (user might want to keep it).
 Future<void> resetSetup(WidgetRef ref) async {
   final prefs = await SharedPreferences.getInstance();
 
-  // Clear setup-related keys
   await prefs.remove('parachute_server_url');
-  await prefs.remove('parachute_server_mode');
+  await prefs.remove('parachute_vault_name');
   await prefs.remove('parachute_onboarding_complete');
 
-  // Invalidate providers to force reload
   ref.invalidate(serverUrlProvider);
-  ref.invalidate(serverModeProvider);
+  ref.invalidate(vaultNameProvider);
   ref.invalidate(onboardingCompleteProvider);
-  ref.invalidate(appModeProvider);
 }

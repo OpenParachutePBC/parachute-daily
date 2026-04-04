@@ -56,7 +56,7 @@ Future<bool> _shouldStartService() async {
 }
 
 /// Attempt to auto-reconnect to the last paired Omi device
-Future<void> _attemptAutoReconnect(ProviderRef<OmiBluetoothService> ref, OmiBluetoothService service) async {
+Future<void> _attemptAutoReconnect(Ref ref, OmiBluetoothService service) async {
   try {
     final prefs = await SharedPreferences.getInstance();
     final autoReconnectEnabled = prefs.getBool('omi_auto_reconnect_enabled') ?? true;

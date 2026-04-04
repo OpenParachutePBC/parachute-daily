@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as flutter_blue_plus;
 import 'package:opus_dart/opus_dart.dart' as opus_dart;
 import 'package:opus_flutter/opus_flutter.dart' as opus_flutter;
@@ -72,13 +71,6 @@ Future<void> _initializeServices() async {
     flutter_blue_plus.LogLevel.none,
     color: false,
   );
-
-  // Initialize Flutter Gemma for on-device AI (embeddings, title generation)
-  try {
-    await FlutterGemma.initialize();
-  } catch (e) {
-    debugPrint('[Parachute] Failed to initialize FlutterGemma: $e');
-  }
 
   // Initialize transcription model download in background
   _initializeTranscription();
