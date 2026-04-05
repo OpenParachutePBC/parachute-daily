@@ -168,7 +168,7 @@ Future<JournalDay> _loadJournal(
   final cache = await ref.watch(noteLocalCacheProvider.future);
 
   // Phase 1 — serve from cache immediately (excludes pending_delete).
-  final cachedNotes = cache.getNotesForDate(dateStr, nextDateStr);
+  final cachedNotes = cache.getNotesForDate(dateStr, nextDateStr, tags: DailyApiService.captureTags);
   if (cachedNotes.isNotEmpty) {
     final entries = cachedNotes.map((note) {
       final audioPath = cache.getAudioPath(note.id);
@@ -180,7 +180,7 @@ Future<JournalDay> _loadJournal(
   // Phase 2 — flush pending ops and fetch from server (only when online).
   final isAvailable = ref.watch(isServerAvailableProvider);
   if (!isAvailable) {
-    final freshNotes = cache.getNotesForDate(dateStr, nextDateStr);
+    final freshNotes = cache.getNotesForDate(dateStr, nextDateStr, tags: DailyApiService.captureTags);
     final entries = freshNotes.map((note) {
       final audioPath = cache.getAudioPath(note.id);
       return _noteToEntry(note, audioPath: audioPath);
@@ -217,7 +217,7 @@ Future<JournalDay> _loadJournal(
   }
 
   // Re-read cache: merged truth.
-  final freshNotes = cache.getNotesForDate(dateStr, nextDateStr);
+  final freshNotes = cache.getNotesForDate(dateStr, nextDateStr, tags: DailyApiService.captureTags);
   final entries = freshNotes.map((note) {
     final audioPath = cache.getAudioPath(note.id);
     return _noteToEntry(note, audioPath: audioPath);
