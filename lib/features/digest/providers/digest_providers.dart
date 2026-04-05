@@ -24,7 +24,7 @@ final digestNotesProvider = FutureProvider.autoDispose<List<Note>>((ref) async {
   final api = ref.watch(graphApiServiceProvider);
 
   final notes = await api.queryNotes(
-    tag: 'digest',
+    tag: 'reader',
     excludeTag: showArchived ? null : 'archived',
     sort: 'desc',
   );
@@ -82,18 +82,18 @@ final digestCountProvider = Provider<int>((ref) {
 /// Returns a map of display label → notes. Notes with only `#digest`
 /// go into an empty-string key (no section header). Sub-tags like
 /// `digest/summary` get a label like "Summary".
-Map<String, List<Note>> groupDigestBySubTag(List<Note> notes) {
+Map<String, List<Note>> groupReaderBySubTag(List<Note> notes) {
   final grouped = <String, List<Note>>{};
 
   for (final note in notes) {
-    final digestTag = note.tags.firstWhere(
-      (t) => t.startsWith('digest/'),
-      orElse: () => 'digest',
+    final readerTag = note.tags.firstWhere(
+      (t) => t.startsWith('reader/'),
+      orElse: () => 'reader',
     );
 
-    final label = digestTag == 'digest'
+    final label = readerTag == 'reader'
         ? ''
-        : _formatSubTagLabel(digestTag.substring('digest/'.length));
+        : _formatSubTagLabel(readerTag.substring('reader/'.length));
 
     grouped.putIfAbsent(label, () => []).add(note);
   }

@@ -6,9 +6,9 @@ import 'package:parachute/core/theme/design_tokens.dart';
 import 'package:parachute/features/daily/journal/providers/journal_providers.dart';
 import '../providers/digest_providers.dart';
 
-/// Digest tab — inbox of AI-surfaced content.
+/// Reader tab — inbox of content to process.
 ///
-/// Shows notes tagged #digest. Pinned items float to top, grouped by sub-tag.
+/// Shows notes tagged #reader. Pinned items float to top, grouped by sub-tag.
 /// Archive toggle in header. Swipe to archive/unarchive, long-press to pin.
 class DigestScreen extends ConsumerStatefulWidget {
   const DigestScreen({super.key});
@@ -39,7 +39,7 @@ class _DigestScreenState extends ConsumerState<DigestScreen> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text('Digest', style: theme.textTheme.headlineSmall),
+                  child: Text('Reader', style: theme.textTheme.headlineSmall),
                 ),
                 // Count badge
                 notesAsync.whenOrNull(
@@ -97,7 +97,7 @@ class _DigestScreenState extends ConsumerState<DigestScreen> {
   }
 
   Widget _buildNotesList(List<Note> notes) {
-    final grouped = groupDigestBySubTag(notes);
+    final grouped = groupReaderBySubTag(notes);
     final sortedKeys = grouped.keys.toList()..sort();
     final showHeaders = sortedKeys.length > 1 ||
         (sortedKeys.length == 1 && sortedKeys.first.isNotEmpty);
@@ -148,14 +148,14 @@ class _DigestScreenState extends ConsumerState<DigestScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              showArchived ? 'No digests' : 'No digests yet',
+              showArchived ? 'Nothing here' : 'Nothing to read yet',
               style: theme.textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
             Text(
               showArchived
                   ? 'Archived digests will appear here.'
-                  : 'AI-surfaced content will appear here as agents create digest notes.',
+                  : 'Content to read and process will appear here.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.outline,
@@ -374,12 +374,12 @@ class _DigestCard extends ConsumerWidget {
 
   List<Widget> _buildSubTagChip(ThemeData theme, bool isDark) {
     final subTag = note.tags.firstWhere(
-      (t) => t.startsWith('digest/'),
+      (t) => t.startsWith('reader/'),
       orElse: () => '',
     );
     if (subTag.isEmpty) return [];
 
-    final label = subTag.substring('digest/'.length);
+    final label = subTag.substring('reader/'.length);
     return [
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),

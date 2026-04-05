@@ -20,13 +20,13 @@ User → Flutter App → GraphApiService → Parachute Vault server
 
 ### Navigation
 
-Three-tab layout: **Digest**, **Daily**, **Docs**.
+Three-tab layout: **Reader**, **Capture**, **Vault**.
 
 | Tab | Query | Description |
 |-----|-------|-------------|
-| **Digest** | `#digest AND NOT #archived` | AI briefs, clipped content |
-| **Daily** | `#daily`, grouped by date | Voice memos, typed notes |
-| **Docs** | `#doc*`, searchable | Blog drafts, meeting notes, lists |
+| **Reader** | `#reader NOT #archived` | Content to process — AI briefs, articles, digests |
+| **Capture** | `#spoken OR #typed OR #clipped`, grouped by date | Voice memos, typed thoughts, clipped quotes |
+| **Vault** | Search + tag browser + saved views | Browse all notes, filter by tag, saved views |
 
 ## Directory Structure
 
@@ -51,21 +51,21 @@ lib/
 │   │   ├── design_tokens.dart       # BrandColors (use BrandColors.forest, NOT DesignTokens)
 │   │   └── app_theme.dart
 │   ├── screens/
-│   │   └── note_detail_screen.dart  # Shared note viewer/editor (Digest + Docs)
+│   │   └── note_detail_screen.dart  # Shared note viewer/editor
 │   └── widgets/                     # Shared UI components
 └── features/
-    ├── daily/                       # Voice journaling (offline-capable)
-    │   ├── home/                    # HomeScreen — main journal view
-    │   ├── journal/                 # Journal CRUD, entry display, local cache
+    ├── daily/                       # Capture tab — voice, typed, clipped (offline-capable)
+    │   ├── home/                    # HomeScreen — main capture view
+    │   ├── journal/                 # Capture CRUD, entry display, local cache
     │   ├── recorder/                # Audio recording & transcription
     │   ├── capture/                 # Photo/handwriting input
-    │   └── search/                  # Journal search
-    ├── digest/                      # AI-surfaced content inbox
-    │   ├── screens/                 # DigestScreen — cards, archive toggle, pinning
-    │   └── providers/               # Digest data + grouping providers
-    ├── docs/                        # Persistent documents
-    │   ├── screens/                 # DocsScreen — grouped by sub-tag, searchable
-    │   └── providers/               # Docs data + search providers
+    │   └── search/                  # Capture search
+    ├── digest/                      # Reader tab — content to process
+    │   ├── screens/                 # DigestScreen (Reader) — cards, archive, pinning
+    │   └── providers/               # Reader data + grouping providers
+    ├── vault/                       # Vault tab — search, browse, saved views
+    │   ├── screens/                 # VaultScreen — search + tag browser
+    │   └── providers/               # Vault search + browse providers
     ├── settings/                    # App settings (server URL, vault, transcription, Omi)
     └── onboarding/                  # Setup flow
 ```
@@ -81,16 +81,23 @@ Everything is a **Note**, differentiated by flat **Tags**:
 
 ### Built-in Tags
 
+**Content type (what it is):**
 ```
-#daily      — user-captured content (voice memos, typed notes)
-#doc        — persistent documents (blog drafts, grocery lists)
-#digest     — AI/system-created content for the user
-#pinned     — kept prominent (applies to any note)
-#archived   — user is done with this (applies to any note)
-#voice      — note was transcribed from voice
+#spoken     — transcribed from voice
+#typed      — written by hand
+#clipped    — grabbed from elsewhere (quote, link, photo)
+#doc        — long-form document (blog draft, meeting notes, list)
+#reader     — content to process (AI briefs, articles, digests)
+#view       — saved view definition (query + display config)
 ```
 
-Tags use optional `/` hierarchy: `#doc/meeting`, `#doc/draft`. The Docs tab queries `LIKE 'doc%'` so sub-tags surface automatically. A note can have multiple tags (e.g., `#daily` + `#doc/meeting` appears in both tabs).
+**State (applies to any note):**
+```
+#pinned     — kept prominent
+#archived   — user is done with this
+```
+
+Tags are flat and composable. A note can have multiple tags. The Capture tab shows `#spoken`, `#typed`, `#clipped` grouped by date. The Reader tab shows `#reader`. The Vault tab shows everything via search and tag filtering. Tags use optional `/` hierarchy for sub-categories: `#doc/meeting`, `#reader/summary`.
 
 ### Server API
 
