@@ -74,14 +74,30 @@ class NoteLocalCache {
   /// Return all visible notes for a date range, oldest first.
   ///
   /// Excludes pending_delete notes. Includes pending_create and pending_edit.
-  List<Note> getNotesForDate(String dateFrom, String dateTo) {
+  /// When [tags] is provided, only returns notes matching at least one of those tags.
+  List<Note> getNotesForDate(String dateFrom, String dateTo, {List<String>? tags}) {
     try {
+      final conditions = <String>[
+        "created_at >= ?",
+        "created_at < ?",
+        "COALESCE(sync_state, 'synced') != 'pending_delete'",
+      ];
+      final params = <Object>[
+        '${dateFrom}T00:00:00.000Z',
+        '${dateTo}T00:00:00.000Z',
+      ];
+
+      if (tags != null && tags.isNotEmpty) {
+        final tagClauses = tags.map((_) => "tags_json LIKE ?").join(' OR ');
+        conditions.add("($tagClauses)");
+        for (final tag in tags) {
+          params.add('%"$tag"%');
+        }
+      }
+
       final rows = _db.select(
-        "SELECT * FROM notes "
-        "WHERE created_at >= ? AND created_at < ? "
-        "AND COALESCE(sync_state, 'synced') != 'pending_delete' "
-        "ORDER BY created_at ASC",
-        ['${dateFrom}T00:00:00.000Z', '${dateTo}T00:00:00.000Z'],
+        "SELECT * FROM notes WHERE ${conditions.join(' AND ')} ORDER BY created_at ASC",
+        params,
       );
       return rows.map(_rowToNote).toList();
     } catch (e) {
