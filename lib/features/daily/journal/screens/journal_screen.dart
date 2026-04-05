@@ -356,15 +356,14 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
         id: entry.id,
         content: entry.content,
         createdAt: entry.createdAt,
-        tags: entry.tags ?? ['daily'],
+        tags: entry.tags ?? ['typed'],
       );
       cache.putNotes([note]);
     } else {
       // Offline — save to cache as pending_create
       final cache = await ref.read(noteLocalCacheProvider.future);
       final localId = 'pending-${DateTime.now().millisecondsSinceEpoch}';
-      final tags = <String>['daily'];
-      if (type == JournalEntryType.voice) tags.add('voice');
+      final tags = <String>[type == JournalEntryType.voice ? 'spoken' : 'typed'];
       final pendingNote = Note(id: localId, content: content, createdAt: DateTime.now(), tags: tags);
       cache.insertPendingCreate(pendingNote, audioPath: audioPath);
       final pending = JournalEntry(
@@ -386,7 +385,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
 
   static String _entryTypeString(JournalEntryType type) {
     switch (type) {
-      case JournalEntryType.voice: return 'voice';
+      case JournalEntryType.voice: return 'spoken';
       case JournalEntryType.photo: return 'photo';
       case JournalEntryType.handwriting: return 'handwriting';
       case JournalEntryType.linked: return 'linked';
@@ -418,8 +417,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     // Step 1: Save to cache as pending_create — content is now safe
     final cache = await ref.read(noteLocalCacheProvider.future);
     final localId = 'pending-${DateTime.now().millisecondsSinceEpoch}';
-    final tags = <String>['daily'];
-    if (type == JournalEntryType.voice) tags.add('voice');
+    final tags = <String>[type == JournalEntryType.voice ? 'spoken' : 'typed'];
     final pendingNote = Note(id: localId, content: content, createdAt: DateTime.now(), tags: tags);
     cache.insertPendingCreate(pendingNote, audioPath: audioPath);
     final pending = JournalEntry(
@@ -464,7 +462,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
       if (!mounted) return;
       final serverNote = Note(
         id: entry.id, content: entry.content,
-        createdAt: entry.createdAt, tags: entry.tags ?? ['daily'],
+        createdAt: entry.createdAt, tags: entry.tags ?? ['typed'],
       );
       cache.putNotes([serverNote]);
 

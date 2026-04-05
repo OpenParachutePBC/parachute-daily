@@ -22,7 +22,7 @@ import 'features/daily/recorder/providers/omi_providers.dart';
 import 'features/daily/journal/providers/journal_providers.dart';
 import 'features/digest/screens/digest_screen.dart';
 import 'features/digest/providers/digest_providers.dart';
-import 'features/docs/screens/docs_screen.dart';
+import 'features/vault/screens/vault_screen.dart';
 import 'features/settings/screens/settings_screen.dart';
 import 'features/onboarding/screens/onboarding_screen.dart';
 
@@ -207,9 +207,9 @@ class _DailyShellState extends ConsumerState<_DailyShell> with WidgetsBindingObs
   }
 
   static const _tabs = [
-    _TabDef('Digest', Icons.auto_awesome_outlined, Icons.auto_awesome),
-    _TabDef('Daily', Icons.edit_note_outlined, Icons.edit_note),
-    _TabDef('Docs', Icons.description_outlined, Icons.description),
+    _TabDef('Reader', Icons.auto_awesome_outlined, Icons.auto_awesome),
+    _TabDef('Capture', Icons.edit_note_outlined, Icons.edit_note),
+    _TabDef('Vault', Icons.inventory_2_outlined, Icons.inventory_2),
   ];
 
   @override
@@ -245,7 +245,7 @@ class _DailyShellState extends ConsumerState<_DailyShell> with WidgetsBindingObs
               children: const [
                 DigestScreen(),
                 HomeScreen(),
-                DocsScreen(),
+                VaultScreen(),
               ],
             ),
           ),

@@ -143,7 +143,7 @@ class _SelectedJournalNotifier extends AutoDisposeAsyncNotifier<JournalDay> {
 /// This is the boundary between the v3 data model (Note + tags) and the
 /// Daily tab's specialized view model (JournalEntry with type, audio, etc.).
 JournalEntry _noteToEntry(Note note, {String? audioPath, bool isPending = false}) {
-  final isVoice = note.hasTag('voice');
+  final isVoice = note.hasTag('spoken');
   return JournalEntry(
     id: note.id,
     title: note.path ?? '',
@@ -202,7 +202,7 @@ Future<JournalDay> _loadJournal(
         dateStr, nextDateStr, serverNotes.map((n) => n.id).toSet(),
       );
       // Fetch and cache audio paths for voice notes (parallel).
-      final voiceNotes = serverNotes.where((n) => n.isVoice).toList();
+      final voiceNotes = serverNotes.where((n) => n.isSpoken).toList();
       if (voiceNotes.isNotEmpty) {
         final audioPaths = await Future.wait(
           voiceNotes.map((n) => api.getAudioPath(n.id)),
@@ -240,7 +240,7 @@ Future<void> _flushPendingOps(
     final pendingCreates = cache.getPendingCreates();
     for (final note in pendingCreates) {
       final audioPath = cache.getAudioPath(note.id);
-      final isVoice = note.hasTag('voice');
+      final isVoice = note.hasTag('spoken');
 
       // Voice notes with local audio: use ingest endpoint (atomic)
       if (isVoice && audioPath != null && audioPath.startsWith('/')) {
@@ -269,7 +269,7 @@ Future<void> _flushPendingOps(
       }
 
       // Non-voice notes or notes with server audio paths: create directly
-      final tags = note.tags.isNotEmpty ? note.tags : ['daily'];
+      final tags = note.tags.isNotEmpty ? note.tags : ['typed'];
       final serverNote = await api.createNote(
         content: note.content,
         tags: tags,

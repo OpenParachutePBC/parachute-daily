@@ -41,8 +41,9 @@ class ApiSearchResult {
 /// All endpoints are under /api/ on the server at [baseUrl].
 ///
 /// Key mappings:
-///   Journal entries = Notes tagged "daily"
-///   Voice entries   = Notes tagged "daily" + "voice"
+///   Spoken entries  = Notes tagged "spoken"
+///   Typed entries   = Notes tagged "typed"
+///   Clipped entries = Notes tagged "clipped"
 ///   Audio files     = Attachments on notes
 class DailyApiService {
   final String baseUrl;
@@ -76,15 +77,19 @@ class DailyApiService {
   // Journal Entry CRUD — backed by Notes tagged "daily"
   // ===========================================================================
 
+  /// Tags that represent capture-type notes (shown in the Capture tab).
+  static const captureTags = ['spoken', 'typed', 'clipped'];
+
   /// Fetch notes for a specific date (YYYY-MM-DD).
   ///
+  /// Queries for capture-type tags (spoken, typed, clipped) by default.
   /// Returns `null` on network error — callers should fall back to cache.
   /// Returns `[]` when the server responds with no notes — authoritative empty.
-  Future<List<Note>?> getNotes({required String date}) async {
+  Future<List<Note>?> getNotes({required String date, String? tag}) async {
     final nextDate = _nextDate(date);
     final uri = Uri.parse('$baseUrl$_apiPrefix/notes').replace(
       queryParameters: {
-        'tag': 'daily',
+        'tag': tag ?? 'spoken,typed,clipped',
         'date_from': '${date}T00:00:00.000Z',
         'date_to': '${nextDate}T00:00:00.000Z',
         'limit': '100',
@@ -119,7 +124,7 @@ class DailyApiService {
   /// flushing offline-created entries). If omitted, the server sets it.
   Future<Note?> createNote({
     required String content,
-    List<String> tags = const ['daily'],
+    List<String> tags = const ['typed'],
     DateTime? createdAt,
   }) async {
     final uri = Uri.parse('$baseUrl$_apiPrefix/notes');
@@ -232,7 +237,7 @@ class DailyApiService {
 
       // Fields
       request.fields['created_at'] = createdAt.toIso8601String();
-      request.fields['tags'] = 'daily,voice';
+      request.fields['tags'] = 'spoken';
       request.fields['transcribe'] = transcribe.toString();
       request.fields['metadata'] = jsonEncode({
         'source': 'voice-memo',
@@ -316,7 +321,7 @@ class DailyApiService {
     // Create a note tagged daily + voice
     final note = await createNote(
       content: '',
-      tags: ['daily', 'voice'],
+      tags: ['spoken'],
     );
 
     // Attach the audio file to the note
@@ -352,7 +357,7 @@ class DailyApiService {
   }) async {
     if (query.trim().isEmpty) return [];
     final uri = Uri.parse('$baseUrl$_apiPrefix/search').replace(
-      queryParameters: {'q': query, 'tag': 'daily', 'limit': '$limit'},
+      queryParameters: {'q': query, 'tag': 'spoken,typed,clipped', 'limit': '$limit'},
     );
     debugPrint('[DailyApiService] GET $uri');
     try {
@@ -389,7 +394,7 @@ class DailyApiService {
     final entries = <JournalEntry>[];
     for (final note in notes) {
       String? audioPath;
-      if (note.isVoice) {
+      if (note.isSpoken) {
         audioPath = await getAudioPath(note.id);
       }
       entries.add(_noteToEntry(note, audioPath: audioPath));
@@ -404,8 +409,7 @@ class DailyApiService {
     DateTime? createdAt,
   }) async {
     final entryType = metadata?['type'] as String? ?? 'text';
-    final tags = <String>['daily'];
-    if (entryType == 'voice') tags.add('voice');
+    final tags = <String>[entryType == 'voice' ? 'spoken' : 'typed'];
     final note = await createNote(content: content, tags: tags, createdAt: createdAt);
     if (note == null) return null;
     return _noteToEntry(note);
@@ -463,7 +467,7 @@ class DailyApiService {
   }
 
   static JournalEntry _noteToEntry(Note note, {String? audioPath}) {
-    final isVoice = note.hasTag('voice');
+    final isVoice = note.hasTag('spoken');
     return JournalEntry(
       id: note.id,
       title: note.path ?? '',
