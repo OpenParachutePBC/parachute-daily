@@ -6,6 +6,7 @@ class Note {
   final String? path;
   final DateTime createdAt;
   final DateTime? updatedAt;
+  final Map<String, dynamic> metadata;
   final List<String> tags;
   final List<NoteLink> links;
 
@@ -15,6 +16,7 @@ class Note {
     this.path,
     required this.createdAt,
     this.updatedAt,
+    this.metadata = const {},
     this.tags = const [],
     this.links = const [],
   });
@@ -43,6 +45,7 @@ class Note {
       path: json['path'] as String?,
       createdAt: (createdRaw != null ? DateTime.tryParse(createdRaw) : null) ?? now,
       updatedAt: updatedRaw != null ? DateTime.tryParse(updatedRaw) : null,
+      metadata: (json['metadata'] as Map<String, dynamic>?) ?? const {},
       tags: (json['tags'] as List<dynamic>?)
               ?.map((t) => t as String)
               .toList() ??
@@ -60,6 +63,7 @@ class Note {
         if (path != null) 'path': path,
         'createdAt': createdAt.toIso8601String(),
         if (updatedAt != null) 'updatedAt': updatedAt!.toIso8601String(),
+        if (metadata.isNotEmpty) 'metadata': metadata,
         'tags': tags,
         'links': links.map((l) => l.toJson()).toList(),
       };
@@ -70,6 +74,7 @@ class Note {
     String? path,
     DateTime? createdAt,
     DateTime? updatedAt,
+    Map<String, dynamic>? metadata,
     List<String>? tags,
     List<NoteLink>? links,
   }) {
@@ -79,6 +84,7 @@ class Note {
       path: path ?? this.path,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      metadata: metadata ?? this.metadata,
       tags: tags ?? this.tags,
       links: links ?? this.links,
     );

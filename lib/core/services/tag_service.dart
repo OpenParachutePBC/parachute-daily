@@ -66,52 +66,6 @@ class TagService {
     }
   }
 
-  /// Get tags for a specific entity.
-  Future<List<String>> getEntityTags(String entityType, String entityId) async {
-    final uri = Uri.parse('$baseUrl/api/tags/$entityType/$entityId');
-    try {
-      final response =
-          await _client.get(uri, headers: _headers).timeout(_timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        return [];
-      }
-      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-      final List<dynamic> tags = decoded['tags'] as List<dynamic>? ?? [];
-      return tags.cast<String>();
-    } catch (e) {
-      debugPrint('[TagService] getEntityTags error: $e');
-      return [];
-    }
-  }
-
-  /// Add a tag to an entity.
-  Future<bool> addTag(String entityType, String entityId, String tag) async {
-    final uri = Uri.parse('$baseUrl/api/tags/$entityType/$entityId');
-    try {
-      final response = await _client
-          .post(uri,
-              headers: _headers, body: jsonEncode({'tag': tag}))
-          .timeout(_timeout);
-      return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (e) {
-      debugPrint('[TagService] addTag error: $e');
-      return false;
-    }
-  }
-
-  /// Remove a tag from an entity.
-  Future<bool> removeTag(
-      String entityType, String entityId, String tag) async {
-    final uri = Uri.parse('$baseUrl/api/tags/$entityType/$entityId/$tag');
-    try {
-      final response =
-          await _client.delete(uri, headers: _headers).timeout(_timeout);
-      return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (e) {
-      debugPrint('[TagService] removeTag error: $e');
-      return false;
-    }
-  }
 }
 
 /// Tag with usage count from the server.

@@ -134,7 +134,7 @@ class DailyApiService {
       final body = jsonEncode({
         'content': content,
         'tags': tags,
-        if (createdAt != null) 'createdAt': createdAt.toIso8601String(),
+        if (createdAt != null) 'created_at': createdAt.toIso8601String(),
       });
       final response = await _client
           .post(uri, headers: _headers, body: body)
