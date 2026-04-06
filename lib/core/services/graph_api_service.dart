@@ -39,8 +39,13 @@ class GraphApiService {
   // ---- Notes ----
 
   /// Query notes by tags, date range, etc.
+  ///
+  /// Pass [tags] with multiple values and [tagMatch] = `'any'` for OR queries
+  /// (e.g. show notes tagged `captured` OR `reader`).
   Future<List<Note>?> queryNotes({
     String? tag,
+    List<String>? tags,
+    String? tagMatch,
     String? excludeTag,
     String? dateFrom,
     String? dateTo,
@@ -48,7 +53,12 @@ class GraphApiService {
     int? limit,
   }) async {
     final params = <String, String>{};
-    if (tag != null) params['tag'] = tag;
+    if (tags != null && tags.isNotEmpty) {
+      params['tag'] = tags.join(',');
+      if (tagMatch != null) params['tag_match'] = tagMatch;
+    } else if (tag != null) {
+      params['tag'] = tag;
+    }
     if (excludeTag != null) params['exclude_tag'] = excludeTag;
     if (dateFrom != null) params['date_from'] = dateFrom;
     if (dateTo != null) params['date_to'] = dateTo;

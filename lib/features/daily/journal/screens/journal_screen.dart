@@ -1130,18 +1130,17 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     var allTags = <String>[];
     final isOnline = ref.read(isServerAvailableProvider);
     if (isOnline) {
+      final graphApi = ref.read(graphApiServiceProvider);
       final tagService = ref.read(tagServiceProvider);
       try {
         final results = await Future.wait([
-          tagService.getEntityTags('note', entry.id),
+          graphApi.getNote(entry.id),
           tagService.listTags(),
         ]);
-        final graphTags = results[0] as List<String>;
+        final note = results[0] as Note?;
         final tagInfos = results[1] as List<TagInfo>;
-        // Use graph tags as source of truth when online; keep metadata
-        // tags if graph has no record yet (entry not yet migrated).
-        if (graphTags.isNotEmpty) {
-          displayEntry = entry.copyWith(tags: graphTags);
+        if (note != null && note.tags.isNotEmpty) {
+          displayEntry = entry.copyWith(tags: note.tags);
         }
         allTags = tagInfos.map((t) => t.tag).toList();
       } catch (_) {
@@ -1186,15 +1185,17 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
             final oldTags = Set<String>.from(displayEntry.tags ?? []);
             final newTags = Set<String>.from(updatedEntry.tags ?? []);
             if (oldTags != newTags) {
-              final tagService = ref.read(tagServiceProvider);
-              for (final t in newTags.difference(oldTags)) {
-                tagService.addTag('note', updatedEntry.id, t).then((ok) {
-                  if (!ok) debugPrint('[JournalScreen] Tag sync failed: add "$t" to ${updatedEntry.id}');
+              final graphApi = ref.read(graphApiServiceProvider);
+              final toAdd = newTags.difference(oldTags).toList();
+              final toRemove = oldTags.difference(newTags).toList();
+              if (toAdd.isNotEmpty) {
+                graphApi.tagNote(updatedEntry.id, toAdd).then((n) {
+                  if (n == null) debugPrint('[JournalScreen] Tag sync failed: add $toAdd to ${updatedEntry.id}');
                 });
               }
-              for (final t in oldTags.difference(newTags)) {
-                tagService.removeTag('note', updatedEntry.id, t).then((ok) {
-                  if (!ok) debugPrint('[JournalScreen] Tag sync failed: remove "$t" from ${updatedEntry.id}');
+              if (toRemove.isNotEmpty) {
+                graphApi.untagNote(updatedEntry.id, toRemove).then((n) {
+                  if (n == null) debugPrint('[JournalScreen] Tag sync failed: remove $toRemove from ${updatedEntry.id}');
                 });
               }
             }
