@@ -39,3 +39,7 @@ class AppConfig {
     return 'https://api.parachute.computer';
   }
 }
+
+/// Parakeet TDT v3 int8 model archive URL (sherpa-onnx).
+const String parakeetModelUrl =
+    'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2';

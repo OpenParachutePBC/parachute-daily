@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:http/http.dart' as http;
 import 'package:archive/archive.dart';
+import 'package:parachute/core/config/app_config.dart' show parakeetModelUrl;
 
 /// Flutter service for Parakeet ASR via sherpa-onnx (Android/cross-platform)
 ///
@@ -212,8 +213,7 @@ class SherpaOnnxService {
     await modelDirFile.create(recursive: true);
 
     // Download tar.bz2 archive from GitHub
-    const archiveUrl =
-        'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2';
+    const archiveUrl = parakeetModelUrl;
     final archivePath = path.join(
       appDir.path,
       'models',
