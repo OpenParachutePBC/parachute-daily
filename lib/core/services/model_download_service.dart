@@ -6,6 +6,7 @@ import 'package:path/path.dart' as path;
 import 'package:http/http.dart' as http;
 import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:parachute/core/config/app_config.dart' show parakeetModelUrl;
 
 /// Model download status
 enum ModelDownloadStatus {
@@ -83,8 +84,7 @@ class ModelDownloadService {
   factory ModelDownloadService() => _instance;
   ModelDownloadService._internal();
 
-  static const String _modelUrl =
-      'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2';
+  static const String _modelUrl = parakeetModelUrl;
   static const String _prefsKeyDownloadComplete = 'parakeet_model_download_complete';
   // The compressed archive is approximately 465MB (actual size varies slightly)
   // Use a more accurate estimate based on actual downloads
