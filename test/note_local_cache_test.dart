@@ -5,8 +5,8 @@
 /// or the Flutter test environment's native library setup.
 ///
 /// Run with: flutter test test/note_local_cache_test.dart
-/// Note: Requires sqlite3 native libraries. On macOS, these are available
-/// via sqlite3_flutter_libs. If tests hang on "loading", run via
+/// Note: Requires sqlite3 native libraries (bundled by sqlite3 ^3.0.0
+/// via Dart build hooks). If tests hang on "loading", run via
 /// integration_test/ instead.
 @TestOn('mac-os')
 library;

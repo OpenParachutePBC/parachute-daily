@@ -24,8 +24,7 @@ dependencies:
   path_provider: ^2.0.0
   path: ^1.9.0
   shared_preferences: ^2.0.0
-  sqlite3: ^2.4.0
-  sqlite3_flutter_libs: '>=0.5.0 <0.7.0'
+  sqlite3: ^3.0.0
 
   # Deep Links
   app_links: ^6.3.2
