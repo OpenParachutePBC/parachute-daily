@@ -507,23 +507,14 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     if (ingestResult != null && mounted) {
       debugPrint('[JournalScreen] Ingest succeeded: ${ingestResult.id}, content: ${ingestResult.content.length} chars');
 
-      // Ingest with sync=true returns the note with transcript already populated
-      await _appendEntryToCache(
-        JournalEntry(
-          id: ingestResult.id,
-          title: ingestResult.path ?? '',
-          content: ingestResult.content,
-          type: JournalEntryType.voice,
-          createdAt: ingestResult.createdAt,
-          durationSeconds: duration,
-        ),
-        content: ingestResult.content,
-        type: JournalEntryType.voice,
-        durationSeconds: duration,
-      );
-
       // Clean up local audio — server has it now
       try { await File(localAudioPath).delete(); } catch (_) {}
+
+      // Force a full refresh from server — the note is there now.
+      // Don't use _appendEntryToCache because the sync ingest takes long enough
+      // that the journal state may have changed while we were waiting.
+      ref.invalidate(selectedJournalProvider);
+      ref.read(journalRefreshTriggerProvider.notifier).state++;
       return;
     }
 
