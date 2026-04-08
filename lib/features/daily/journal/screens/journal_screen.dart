@@ -505,7 +505,6 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
         await ref.read(transcriptionServiceReachableProvider.future),
     };
     if (!mounted) return;
-    debugPrint('[JournalScreen] Voice ingest mode=$mode useServer=$useServerTranscription');
 
     // Try ingest (handles upload + note creation + transcription atomically)
     final ingestResult = await api.ingestVoiceMemo(
