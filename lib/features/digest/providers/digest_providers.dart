@@ -54,19 +54,20 @@ final digestNotesProvider = FutureProvider.autoDispose<List<Note>>((ref) async {
   }
 });
 
-/// Sort digest notes: pinned first, then by date descending.
+/// Sort digest notes: pinned first, then by creation date descending.
+///
+/// Sorts by `createdAt` only — not `updatedAt` — so that background hooks
+/// (TTS generation, async transcription, embeddings, etc.) don't bubble
+/// a note to the top of the Reader queue every time they touch metadata.
+/// `createdAt` is the stable authored-at date; `updatedAt` churns on every
+/// server-side write regardless of whether the user was involved.
 List<Note> _sortDigestNotes(List<Note> notes) {
   final pinned = notes.where((n) => n.isPinned).toList();
   final unpinned = notes.where((n) => !n.isPinned).toList();
 
-  // Each group sorted by most recent activity
-  int byDate(Note a, Note b) {
-    final aDate = a.updatedAt ?? a.createdAt;
-    final bDate = b.updatedAt ?? b.createdAt;
-    return bDate.compareTo(aDate);
-  }
-  pinned.sort(byDate);
-  unpinned.sort(byDate);
+  int byCreatedAt(Note a, Note b) => b.createdAt.compareTo(a.createdAt);
+  pinned.sort(byCreatedAt);
+  unpinned.sort(byCreatedAt);
 
   return [...pinned, ...unpinned];
 }
