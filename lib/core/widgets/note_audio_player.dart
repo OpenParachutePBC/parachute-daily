@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:parachute/core/config/app_config.dart';
 import 'package:parachute/core/models/thing.dart';
@@ -11,6 +13,7 @@ import 'package:parachute/core/providers/feature_flags_provider.dart'
 import 'package:parachute/core/theme/design_tokens.dart';
 import 'package:parachute/features/daily/journal/providers/journal_providers.dart';
 import 'package:parachute/features/daily/journal/utils/journal_helpers.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// Inline audio player rendered on the note view when a note has an
 /// `audio/*` attachment.
@@ -50,6 +53,7 @@ class _NoteAudioPlayerState extends ConsumerState<NoteAudioPlayer> {
   bool _loading = true;
   String? _error;
   String? _audioUrl;
+  String? _tempFilePath;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -84,6 +88,11 @@ class _NoteAudioPlayerState extends ConsumerState<NoteAudioPlayer> {
     _durationSub?.cancel();
     _stateSub?.cancel();
     _player.dispose();
+    // Best-effort cleanup of the downloaded temp file.
+    final temp = _tempFilePath;
+    if (temp != null) {
+      unawaited(File(temp).delete().catchError((_) => File(temp)));
+    }
     super.dispose();
   }
 
@@ -134,26 +143,68 @@ class _NoteAudioPlayerState extends ConsumerState<NoteAudioPlayer> {
       final apiKey = ref.read(apiKeyProvider).valueOrNull;
       final url = JournalHelpers.getAudioUrl(relPath, baseUrl);
 
-      final headers = <String, String>{};
-      if (apiKey != null && apiKey.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $apiKey';
+      // Download the audio via Dart HTTP into a temp file, then hand the
+      // local path to just_audio. Mirrors the pattern in AudioService:
+      // ExoPlayer/AVPlayer HTTP clients can hit platform networking
+      // restrictions (Android cleartext policy, macOS ATS) and
+      // AudioSource.uri(headers:) is unreliable on iOS/macOS for
+      // authenticated sources. Dart's http client bypasses all that.
+      final localPath = await _downloadToTemp(url, apiKey);
+      if (localPath == null) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _audioUrl = null;
+        });
+        return;
       }
+      _tempFilePath = localPath;
 
-      await _player.setAudioSource(
-        AudioSource.uri(Uri.parse(url), headers: headers),
-      );
+      await _player.setFilePath(localPath);
 
       if (!mounted) return;
       setState(() {
         _loading = false;
         _audioUrl = url;
       });
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('NoteAudioPlayer load error: $e\n$st');
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error = e.toString();
       });
+    }
+  }
+
+  /// Download an audio URL to a temp file for local playback. Returns the
+  /// absolute file path, or null on failure.
+  Future<String?> _downloadToTemp(String url, String? apiKey) async {
+    try {
+      final headers = <String, String>{};
+      if (apiKey != null && apiKey.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $apiKey';
+      }
+      final response = await http.get(Uri.parse(url), headers: headers);
+      if (response.statusCode != 200) {
+        debugPrint(
+          'NoteAudioPlayer: download failed HTTP ${response.statusCode} for $url',
+        );
+        return null;
+      }
+      final tempDir = await getTemporaryDirectory();
+      final hash = url.hashCode.toRadixString(36);
+      final ext = () {
+        final last = url.split('?').first.split('.').last;
+        // Guard against paths without an extension.
+        return last.length <= 5 ? last : 'mp3';
+      }();
+      final file = File('${tempDir.path}/note_audio_$hash.$ext');
+      await file.writeAsBytes(response.bodyBytes);
+      return file.path;
+    } catch (e) {
+      debugPrint('NoteAudioPlayer: download error: $e');
+      return null;
     }
   }
 
@@ -184,29 +235,10 @@ class _NoteAudioPlayerState extends ConsumerState<NoteAudioPlayer> {
 
   @override
   Widget build(BuildContext context) {
-    // Loading: tiny shimmer row so the layout doesn't jump once loaded.
-    if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
-        child: SizedBox(
-          height: 20,
-          child: Row(
-            children: [
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              SizedBox(width: 12),
-              Text('Loading audio...', style: TextStyle(fontSize: 12)),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // No audio attachment → render nothing (per issue spec).
-    if (_audioUrl == null || _error != null) {
+    // While loading OR if there's no audio, render nothing. The vast
+    // majority of notes have no audio attachment — we don't want to
+    // flash a "Loading audio..." placeholder on every note open.
+    if (_loading || _audioUrl == null || _error != null) {
       return const SizedBox.shrink();
     }
 
