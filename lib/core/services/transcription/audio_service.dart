@@ -163,12 +163,18 @@ class AudioService {
 
   Future<String> _getRecordingPath(String recordingId) async {
     try {
-      // Use temp folder for recording-in-progress OGG Opus files.
-      // AudioEncoder.opus in the `record` package produces an OGG container
-      // with Opus audio, so we use the `.ogg` extension to match the
-      // server-side Opus-migrated assets (see parachute-vault#45).
+      // Temp folder for recording-in-progress Opus files. Extension is
+      // platform-dependent because the `record` package's AVFoundation-based
+      // backends (`record_ios`, `record_macos`) fall `AudioEncoder.opus`
+      // through to `AVFileType.m4a`, producing an M4A container with Opus
+      // audio — not a real OGG file. Android's backend uses
+      // `MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG` and does produce a real
+      // OGG container. We name each file after its actual container so
+      // downstream mime-inference (audio/mp4 vs audio/ogg) matches reality.
+      // See parachute-daily#68 and parachute-vault#45.
       final fileSystem = FileSystemService.daily();
-      final path = await fileSystem.getRecordingTempPath(extension: 'ogg');
+      final extension = (Platform.isIOS || Platform.isMacOS) ? 'm4a' : 'ogg';
+      final path = await fileSystem.getRecordingTempPath(extension: extension);
       debugPrint('Generated temp recording path: $path');
       return path;
     } catch (e) {
@@ -229,10 +235,11 @@ class AudioService {
       await WakelockPlus.enable();
       debugPrint('Wakelock enabled');
 
-      // Start recording with OGG Opus format.
-      // Server-side storage was unified to Opus in parachute-vault#45;
-      // recording directly as Opus on-device matches that format so no
-      // transcoding is needed on upload.
+      // Start recording with Opus audio. Container is OGG on Android and
+      // M4A on iOS/macOS — the `record` package's AVFoundation backends
+      // don't support OGG. Server-side storage was unified to Opus in
+      // parachute-vault#45; on-device Opus encoding matches that format
+      // so no transcoding is needed on upload. See parachute-daily#68.
       debugPrint('Starting recorder...');
       await _recorder.start(
         const RecordConfig(
