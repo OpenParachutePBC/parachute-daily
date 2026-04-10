@@ -44,7 +44,7 @@ Future<void> handleWikilinkTap({
   if (!context.mounted) return;
 
   // Single strong match → navigate directly
-  if (ranked.length == 1 || _isClearWinner(ranked)) {
+  if (ranked.length == 1 || _isClearWinner(ranked, target)) {
     _navigateToNote(context, ranked.first, onChanged);
     return;
   }
@@ -67,42 +67,31 @@ void _navigateToNote(BuildContext context, Note note, VoidCallback? onChanged) {
   );
 }
 
-/// Rank search results by match quality against the target.
+/// Score how well a note matches a wikilink target.
 ///
-/// Priority: exact path > case-insensitive path > path-contains > other.
-List<Note> _rankMatches(List<Note> results, String target) {
+/// Lower is better: 0 = exact path, 4 = content match only.
+int _matchScore(Note note, String target) {
+  final path = note.path ?? '';
+  final pathLower = path.toLowerCase();
   final targetLower = target.toLowerCase();
+  if (path == target) return 0; // exact
+  if (pathLower == targetLower) return 1; // case-insensitive exact
+  if (pathLower.endsWith('/$targetLower')) return 2; // path suffix
+  if (pathLower.contains(targetLower)) return 3; // contains
+  return 4; // content match only
+}
 
-  int score(Note note) {
-    final path = note.path ?? '';
-    final pathLower = path.toLowerCase();
-    if (path == target) return 0; // exact
-    if (pathLower == targetLower) return 1; // case-insensitive exact
-    // Path ends with target (e.g., "People/Atlas" matches "Atlas")
-    if (pathLower.endsWith('/$targetLower')) return 2;
-    if (pathLower.contains(targetLower)) return 3; // contains
-    return 4; // content match only
-  }
-
-  final sorted = List<Note>.from(results)..sort((a, b) => score(a).compareTo(score(b)));
+/// Rank search results by match quality against the target.
+List<Note> _rankMatches(List<Note> results, String target) {
+  final sorted = List<Note>.from(results)
+    ..sort((a, b) => _matchScore(a, target).compareTo(_matchScore(b, target)));
   return sorted;
 }
 
 /// Returns true if the top result is clearly better than the rest.
-bool _isClearWinner(List<Note> ranked) {
+bool _isClearWinner(List<Note> ranked, String target) {
   if (ranked.length < 2) return true;
-  final first = ranked[0];
-  final second = ranked[1];
-
-  // If first has a path and second doesn't, clear winner
-  if ((first.path ?? '').isNotEmpty && (second.path ?? '').isEmpty) return true;
-
-  // If first is an exact path match, clear winner
-  final firstPath = first.path ?? '';
-  final secondPath = second.path ?? '';
-  if (firstPath == secondPath) return true;
-
-  return false;
+  return _matchScore(ranked[0], target) < _matchScore(ranked[1], target);
 }
 
 /// Shows a bottom sheet with disambiguation options.
