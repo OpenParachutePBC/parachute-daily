@@ -84,9 +84,10 @@ class NoteLocalCache {
       ];
       // Convert local date boundaries to UTC so the query matches the user's
       // actual day (cache stores timestamps in UTC).
+      // DateTime.parse on date-only strings returns UTC, so construct local manually.
       final params = <Object>[
-        DateTime.parse(dateFrom).toUtc().toIso8601String(),
-        DateTime.parse(dateTo).toUtc().toIso8601String(),
+        _localMidnight(dateFrom).toUtc().toIso8601String(),
+        _localMidnight(dateTo).toUtc().toIso8601String(),
       ];
 
       if (tags != null && tags.isNotEmpty) {
@@ -348,8 +349,8 @@ class NoteLocalCache {
         "WHERE created_at >= ? AND created_at < ? "
         "AND COALESCE(sync_state, 'synced') = 'synced' "
         "AND id NOT IN ($placeholders)",
-        [DateTime.parse(dateFrom).toUtc().toIso8601String(),
-         DateTime.parse(dateTo).toUtc().toIso8601String(), ...serverIds],
+        [_localMidnight(dateFrom).toUtc().toIso8601String(),
+         _localMidnight(dateTo).toUtc().toIso8601String(), ...serverIds],
       );
     } catch (e) {
       debugPrint('[NoteLocalCache] removeStaleNotes error: $e');
@@ -362,12 +363,23 @@ class NoteLocalCache {
       _db.execute(
         "DELETE FROM notes WHERE created_at >= ? AND created_at < ? "
         "AND COALESCE(sync_state, 'synced') = 'synced'",
-        [DateTime.parse(dateFrom).toUtc().toIso8601String(),
-         DateTime.parse(dateTo).toUtc().toIso8601String()],
+        [_localMidnight(dateFrom).toUtc().toIso8601String(),
+         _localMidnight(dateTo).toUtc().toIso8601String()],
       );
     } catch (e) {
       debugPrint('[NoteLocalCache] clearDateRange error: $e');
     }
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /// Parse a YYYY-MM-DD string as local midnight.
+  ///
+  /// [DateTime.parse] on date-only strings returns UTC, so we split and
+  /// construct a local [DateTime] instead.
+  static DateTime _localMidnight(String date) {
+    final parts = date.split('-');
+    return DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────

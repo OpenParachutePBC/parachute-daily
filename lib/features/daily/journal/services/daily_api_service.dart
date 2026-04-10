@@ -89,7 +89,8 @@ class DailyApiService {
   Future<List<Note>?> getNotes({required String date, String? tag}) async {
     // Convert local date boundaries to UTC so the query matches the user's
     // actual day regardless of timezone (server stores timestamps in UTC).
-    final localFrom = DateTime.parse(date);
+    // DateTime.parse on date-only strings returns UTC, so construct local manually.
+    final localFrom = _localMidnight(date);
     final localTo = localFrom.add(const Duration(days: 1));
     final uri = Uri.parse('$baseUrl$_apiPrefix/notes').replace(
       queryParameters: {
@@ -537,4 +538,13 @@ String nextDate(String date) {
   final m = next.month.toString().padLeft(2, '0');
   final d = next.day.toString().padLeft(2, '0');
   return '$y-$m-$d';
+}
+
+/// Parse a YYYY-MM-DD string as local midnight.
+///
+/// [DateTime.parse] on date-only strings returns UTC, so we split and
+/// construct a local [DateTime] instead.
+DateTime _localMidnight(String date) {
+  final parts = date.split('-');
+  return DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
 }
