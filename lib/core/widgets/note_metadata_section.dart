@@ -71,6 +71,16 @@ class _NoteMetadataSectionState extends ConsumerState<NoteMetadataSection> {
     _metadata = Map<String, dynamic>.from(widget.note.metadata);
   }
 
+  @override
+  void didUpdateWidget(NoteMetadataSection old) {
+    super.didUpdateWidget(old);
+    // Sync from parent if the note changed (e.g., provider refresh) and
+    // we're not mid-save (which has its own optimistic update).
+    if (old.note.id != widget.note.id || (!_saving && old.note.metadata != widget.note.metadata)) {
+      _metadata = Map<String, dynamic>.from(widget.note.metadata);
+    }
+  }
+
   /// Find the schema that applies to this note (first matching tag).
   List<_FieldDef>? get _schema {
     for (final tag in widget.note.tags) {
@@ -208,9 +218,9 @@ class _NoteMetadataSectionState extends ConsumerState<NoteMetadataSection> {
   }
 
   String _formatKey(String key) {
-    return key
-        .replaceAll('_', ' ')
-        .replaceFirst(key[0], key[0].toUpperCase());
+    if (key.isEmpty) return key;
+    final spaced = key.replaceAll('_', ' ');
+    return spaced[0].toUpperCase() + spaced.substring(1);
   }
 }
 
