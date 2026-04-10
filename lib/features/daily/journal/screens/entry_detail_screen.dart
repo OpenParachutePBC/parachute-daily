@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:markdown/markdown.dart' as md;
 import 'package:parachute/core/theme/design_tokens.dart';
 import 'package:parachute/core/widgets/tag_picker.dart';
 import 'package:parachute/core/widgets/wikilink_handler.dart';
@@ -464,9 +463,7 @@ class _EntryDetailScreenState extends ConsumerState<EntryDetailScreen> {
       shrinkWrap: true,
       softLineBreak: true,
       selectable: true,
-      extensionSet: md.ExtensionSet(
-        [], [WikilinkSyntax()],
-      ),
+      inlineSyntaxes: [WikilinkSyntax()],
       builders: {
         'wikilink': WikilinkBuilder(
           onTap: (target) => handleWikilinkTap(

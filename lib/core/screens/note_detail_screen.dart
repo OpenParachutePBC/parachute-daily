@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:markdown/markdown.dart' as md;
 import 'package:parachute/core/models/thing.dart';
 import 'package:parachute/core/theme/design_tokens.dart';
 import 'package:parachute/core/widgets/note_audio_player.dart';
@@ -217,9 +216,7 @@ class _NoteDetailScreenState extends ConsumerState<NoteDetailScreen> {
         MarkdownBody(
           data: widget.note.content,
           selectable: true,
-          extensionSet: md.ExtensionSet(
-            [], [WikilinkSyntax()],
-          ),
+          inlineSyntaxes: [WikilinkSyntax()],
           builders: {
             'wikilink': WikilinkBuilder(
               onTap: (target) => handleWikilinkTap(

@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -67,20 +66,19 @@ class WikilinkBuilder extends MarkdownElementBuilder {
             ? BrandColors.nightTextSecondary.withValues(alpha: 0.6)
             : BrandColors.driftwood);
 
-    return RichText(
-      text: TextSpan(
-        text: display,
-        style: (preferredStyle ?? parentStyle)?.copyWith(
-              color: color,
-              decoration:
-                  isResolved ? TextDecoration.underline : TextDecoration.none,
-              decorationColor: color.withValues(alpha: 0.4),
-              decorationStyle: TextDecorationStyle.solid,
-              fontStyle: isResolved ? null : FontStyle.italic,
-            ) ??
-            TextStyle(color: color),
-        recognizer: TapGestureRecognizer()..onTap = () => onTap(target),
-      ),
+    final style = (preferredStyle ?? parentStyle)?.copyWith(
+          color: color,
+          decoration:
+              isResolved ? TextDecoration.underline : TextDecoration.none,
+          decorationColor: color.withValues(alpha: 0.4),
+          decorationStyle: TextDecorationStyle.solid,
+          fontStyle: isResolved ? null : FontStyle.italic,
+        ) ??
+        TextStyle(color: color);
+
+    return GestureDetector(
+      onTap: () => onTap(target),
+      child: Text(display, style: style),
     );
   }
 }

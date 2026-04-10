@@ -15,7 +15,15 @@ Future<void> handleWikilinkTap({
 }) async {
   // Search for the note by its path/title
   final results = await api.searchNotes(target, limit: 10);
-  if (results == null || results.isEmpty) {
+  if (results == null) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not search — check connection')),
+      );
+    }
+    return;
+  }
+  if (results.isEmpty) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
