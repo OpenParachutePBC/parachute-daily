@@ -245,6 +245,11 @@ class DailyApiService {
   }
 
   /// Upload audio and create a voice note with attachment.
+  ///
+  /// Creates the note WITHOUT tags first, attaches audio, then adds the
+  /// `captured` tag and triggers a metadata update. This avoids a race
+  /// condition where vault triggers fire on note creation before the
+  /// audio attachment is linked — see #voice-memo-race.
   Future<Note?> uploadVoiceNote({
     required File audioFile,
     required int durationSeconds,
@@ -260,17 +265,16 @@ class DailyApiService {
       await deleteNote(replaceNoteId);
     }
 
-    // Create a note tagged daily + voice
+    // 1. Create note WITHOUT tags — vault triggers won't fire yet.
     final note = await createNote(
       content: '',
-      tags: ['captured'],
+      tags: [],
     );
+    if (note == null) return null;
 
-    // Attach the audio file to the note. Infer mime from the uploaded
-    // file extension so we don't hardcode audio/wav after the Opus
-    // migration — voice memos are .ogg now, older callers may pass
-    // other formats, and the server's storage layer already normalizes.
-    if (note != null && audioPath.isNotEmpty) {
+    // 2. Attach the audio file. Infer mime from the uploaded file
+    // extension so we don't hardcode audio/wav after the Opus migration.
+    if (audioPath.isNotEmpty) {
       final ext = audioPath.split('.').last.toLowerCase();
       final mime = switch (ext) {
         'ogg' || 'opus' => 'audio/ogg',
@@ -282,7 +286,49 @@ class DailyApiService {
       await addAttachment(note.id, audioPath, mime);
     }
 
+    // 3. Add the `captured` tag (PATCH with tags only — no hook fires).
+    await patchNote(note.id, tags: ['captured']);
+
+    // 4. Set metadata to trigger the "updated" hook. The note now has
+    //    both the `captured` tag and the audio attachment, so vault
+    //    triggers (e.g. transcription) will find the audio file.
+    await patchNote(note.id, metadata: {'source': 'voice'});
+
     return note;
+  }
+
+  /// PATCH a note with optional metadata and/or tag additions.
+  ///
+  /// Uses the vault's v2 PATCH shape: `tags.add` for tagging, top-level
+  /// `metadata` for metadata merge. Each field is only sent when non-null.
+  Future<Note?> patchNote(
+    String noteId, {
+    List<String>? tags,
+    Map<String, dynamic>? metadata,
+  }) async {
+    final uri = Uri.parse('$baseUrl$_apiPrefix/notes/$noteId');
+    try {
+      final body = <String, dynamic>{};
+      if (tags != null) body['tags'] = {'add': tags};
+      if (metadata != null) body['metadata'] = metadata;
+
+      final response = await _client
+          .patch(uri, headers: _headers, body: jsonEncode(body))
+          .timeout(_timeout);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint('[DailyApiService] PATCH notes/$noteId ${response.statusCode}');
+        return null;
+      }
+
+      onReachabilityChanged?.call(true);
+      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+      return Note.fromJson(decoded);
+    } catch (e) {
+      debugPrint('[DailyApiService] patchNote error: $e');
+      onReachabilityChanged?.call(false);
+      return null;
+    }
   }
 
   /// Add an attachment to a note.
