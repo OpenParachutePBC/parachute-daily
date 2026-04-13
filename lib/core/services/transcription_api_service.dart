@@ -70,66 +70,27 @@ class TranscriptionApiService {
     return text.trim();
   }
 
-  /// Check if the transcription endpoint is reachable.
-  ///
-  /// Tries multiple approaches since different services expose different
-  /// health endpoints:
-  /// 1. GET /health (common for self-hosted services like parachute-scribe)
-  /// 2. GET /v1/models (OpenAI-compatible services like Groq)
-  /// 3. HEAD on the base URL (fallback reachability check)
+  /// Check if the transcription endpoint is reachable via GET /v1/models.
   Future<ConnectionResult> checkConnection() async {
-    final headers = <String, String>{
-      if (apiKey != null && apiKey!.isNotEmpty)
-        'Authorization': 'Bearer $apiKey',
-    };
-    const timeout = Duration(seconds: 5);
-
     try {
-      // Try /health first (parachute-scribe, whisper.cpp server)
-      try {
-        final healthUri = Uri.parse('$baseUrl/health');
-        final healthResp = await _client
-            .get(healthUri, headers: headers)
-            .timeout(timeout);
-        if (healthResp.statusCode == 200) {
-          return ConnectionResult.ok('Transcription service connected');
-        }
-        if (healthResp.statusCode == 401 || healthResp.statusCode == 403) {
-          return ConnectionResult.authError(
-            'Server reachable but authentication failed — check your API key',
-          );
-        }
-      } catch (_) {
-        // /health not available, try next
-      }
+      final uri = Uri.parse('$baseUrl/v1/models');
+      final headers = <String, String>{
+        if (apiKey != null && apiKey!.isNotEmpty)
+          'Authorization': 'Bearer $apiKey',
+      };
+      final response = await _client
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 5));
 
-      // Try /v1/models (OpenAI, Groq)
-      try {
-        final modelsUri = Uri.parse('$baseUrl/v1/models');
-        final modelsResp = await _client
-            .get(modelsUri, headers: headers)
-            .timeout(timeout);
-        if (modelsResp.statusCode == 200) {
-          return ConnectionResult.ok('Transcription service connected');
-        }
-        if (modelsResp.statusCode == 401 || modelsResp.statusCode == 403) {
-          return ConnectionResult.authError(
-            'Server reachable but authentication failed — check your API key',
-          );
-        }
-      } catch (_) {
-        // /v1/models not available, try next
+      if (response.statusCode == 200) {
+        return ConnectionResult.ok('Transcription service connected');
+      } else if (response.statusCode == 401 || response.statusCode == 403) {
+        return ConnectionResult.authError(
+          'Server reachable but authentication failed — check your API key',
+        );
+      } else {
+        return ConnectionResult.error('Server returned ${response.statusCode}');
       }
-
-      // Fallback: HEAD on base URL
-      final baseUri = Uri.parse(baseUrl);
-      final headReq = http.Request('HEAD', baseUri);
-      headReq.headers.addAll(headers);
-      final headResp = await _client.send(headReq).timeout(timeout);
-      if (headResp.statusCode < 500) {
-        return ConnectionResult.ok('Transcription service reachable');
-      }
-      return ConnectionResult.error('Server returned ${headResp.statusCode}');
     } catch (e) {
       debugPrint('[TranscriptionApi] Connection check failed: $e');
       return ConnectionResult.error('Could not reach transcription service');
