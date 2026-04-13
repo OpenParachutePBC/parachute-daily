@@ -9,9 +9,11 @@ import '../../features/daily/recorder/providers/service_providers.dart'
     show transcriptionServiceUrlProvider, transcriptionServiceApiKeyProvider,
          ttsServiceUrlProvider, ttsServiceApiKeyProvider;
 
-/// Provider for backend health service
-final backendHealthServiceProvider = Provider.family<BackendHealthService, String>((ref, baseUrl) {
-  final service = BackendHealthService(baseUrl: baseUrl);
+/// Provider for backend health service (includes API key for authenticated endpoints)
+final backendHealthServiceProvider = Provider<BackendHealthService>((ref) {
+  final url = ref.watch(aiServerUrlProvider).valueOrNull ?? '';
+  final key = ref.watch(apiKeyProvider).valueOrNull;
+  final service = BackendHealthService(baseUrl: url, apiKey: key);
   ref.onDispose(() => service.dispose());
   return service;
 });
@@ -25,7 +27,7 @@ final serverHealthProvider = FutureProvider<ServerHealthStatus?>((ref) async {
     return null; // No server configured
   }
 
-  final service = ref.watch(backendHealthServiceProvider(url));
+  final service = ref.watch(backendHealthServiceProvider);
   return service.checkHealth();
 });
 
@@ -39,7 +41,7 @@ final periodicServerHealthProvider = StreamProvider<ServerHealthStatus?>((ref) a
     return;
   }
 
-  final service = ref.watch(backendHealthServiceProvider(url));
+  final service = ref.watch(backendHealthServiceProvider);
 
   // Initial check
   yield await service.checkHealth();

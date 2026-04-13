@@ -176,7 +176,11 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
       ),
     );
 
-    final healthService = BackendHealthService(baseUrl: url);
+    final apiKey = _apiKeyController.text.trim();
+    final healthService = BackendHealthService(
+      baseUrl: url,
+      apiKey: apiKey.isEmpty ? null : apiKey,
+    );
     try {
       final status = await healthService.checkHealth();
 

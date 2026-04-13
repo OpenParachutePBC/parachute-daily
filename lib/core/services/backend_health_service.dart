@@ -80,14 +80,21 @@ class ServerHealthStatus {
 /// Backend health checking service
 class BackendHealthService {
   final String baseUrl;
+  final String? apiKey;
   final Duration timeout;
   final http.Client _client;
 
   BackendHealthService({
     required this.baseUrl,
+    this.apiKey,
     this.timeout = const Duration(seconds: 3),
     http.Client? client,
   }) : _client = client ?? http.Client();
+
+  Map<String, String> get _authHeaders => {
+    if (apiKey != null && apiKey!.isNotEmpty)
+      'Authorization': 'Bearer $apiKey',
+  };
 
   /// Check server health
   Future<ServerHealthStatus> checkHealth() async {
@@ -102,7 +109,7 @@ class BackendHealthService {
 
     try {
       final uri = Uri.parse('$baseUrl/api/health');
-      final response = await _client.get(uri).timeout(timeout);
+      final response = await _client.get(uri, headers: _authHeaders).timeout(timeout);
 
       if (response.statusCode == 200) {
         String? version;
