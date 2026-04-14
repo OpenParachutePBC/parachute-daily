@@ -70,25 +70,24 @@ class TranscriptionApiService {
     return text.trim();
   }
 
-  /// Check if the transcription endpoint is reachable.
-  /// Returns a [ConnectionResult] with status and message.
+  /// Check if the transcription endpoint is reachable via GET /v1/models.
   Future<ConnectionResult> checkConnection() async {
     try {
       final uri = Uri.parse('$baseUrl/v1/models');
-      final request = http.Request('GET', uri);
-      if (apiKey != null && apiKey!.isNotEmpty) {
-        request.headers['Authorization'] = 'Bearer $apiKey';
-      }
-
-      final streamedResponse = await _client.send(request).timeout(
-        const Duration(seconds: 5),
-      );
-      final response = await http.Response.fromStream(streamedResponse);
+      final headers = <String, String>{
+        if (apiKey != null && apiKey!.isNotEmpty)
+          'Authorization': 'Bearer $apiKey',
+      };
+      final response = await _client
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         return ConnectionResult.ok('Transcription service connected');
       } else if (response.statusCode == 401 || response.statusCode == 403) {
-        return ConnectionResult.authError('Server reachable but authentication failed — check your API key');
+        return ConnectionResult.authError(
+          'Server reachable but authentication failed — check your API key',
+        );
       } else {
         return ConnectionResult.error('Server returned ${response.statusCode}');
       }

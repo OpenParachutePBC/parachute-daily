@@ -1,20 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:parachute/core/theme/design_tokens.dart';
-import 'package:parachute/core/services/transcription_api_service.dart';
+import 'package:parachute/core/services/tts_api_service.dart';
 import 'package:parachute/features/daily/recorder/providers/service_providers.dart';
 
-/// Settings section for configuring an external Whisper-compatible transcription service.
-class TranscriptionServiceSection extends ConsumerStatefulWidget {
-  const TranscriptionServiceSection({super.key});
+/// Settings section for configuring a TTS service (Narrate / OpenAI TTS-compatible).
+class TtsServiceSection extends ConsumerStatefulWidget {
+  const TtsServiceSection({super.key});
 
   @override
-  ConsumerState<TranscriptionServiceSection> createState() =>
-      _TranscriptionServiceSectionState();
+  ConsumerState<TtsServiceSection> createState() => _TtsServiceSectionState();
 }
 
-class _TranscriptionServiceSectionState
-    extends ConsumerState<TranscriptionServiceSection> {
+class _TtsServiceSectionState extends ConsumerState<TtsServiceSection> {
   final _urlController = TextEditingController();
   final _apiKeyController = TextEditingController();
 
@@ -32,8 +30,8 @@ class _TranscriptionServiceSectionState
   }
 
   Future<void> _loadSettings() async {
-    final url = await ref.read(transcriptionServiceUrlProvider.future);
-    final apiKey = await ref.read(transcriptionServiceApiKeyProvider.future);
+    final url = await ref.read(ttsServiceUrlProvider.future);
+    final apiKey = await ref.read(ttsServiceApiKeyProvider.future);
     if (mounted) {
       if (url != null) _urlController.text = url;
       if (apiKey != null) _apiKeyController.text = apiKey;
@@ -42,14 +40,14 @@ class _TranscriptionServiceSectionState
 
   Future<void> _saveUrl() async {
     final url = _urlController.text.trim();
-    await setTranscriptionServiceUrl(url.isEmpty ? null : url);
-    ref.invalidate(transcriptionServiceUrlProvider);
+    await setTtsServiceUrl(url.isEmpty ? null : url);
+    ref.invalidate(ttsServiceUrlProvider);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(url.isEmpty
-              ? 'Transcription service URL cleared'
-              : 'Transcription service URL saved'),
+              ? 'TTS service URL cleared'
+              : 'TTS service URL saved'),
           backgroundColor: BrandColors.success,
         ),
       );
@@ -58,7 +56,7 @@ class _TranscriptionServiceSectionState
 
   Future<void> _saveApiKey({bool showSnackbar = true}) async {
     final key = _apiKeyController.text.trim();
-    await ref.read(transcriptionServiceApiKeyProvider.notifier).setApiKey(
+    await ref.read(ttsServiceApiKeyProvider.notifier).setApiKey(
       key.isEmpty ? null : key,
     );
     if (showSnackbar && mounted) {
@@ -76,7 +74,7 @@ class _TranscriptionServiceSectionState
     if (url.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Enter a transcription service URL first'),
+          content: const Text('Enter a TTS service URL first'),
           backgroundColor: BrandColors.warning,
         ),
       );
@@ -105,24 +103,19 @@ class _TranscriptionServiceSectionState
     );
 
     final apiKey = _apiKeyController.text.trim();
-    final service = TranscriptionApiService(
+    final service = TtsApiService(
       baseUrl: url,
       apiKey: apiKey.isEmpty ? null : apiKey,
     );
 
     try {
-      final result = await service.checkConnection();
+      final ok = await service.checkConnection();
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        final color = result.authOk
-            ? BrandColors.success
-            : result.reachable
-                ? BrandColors.warning
-                : BrandColors.error;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(result.message),
-            backgroundColor: color,
+            content: Text(ok ? 'Connected to TTS service' : 'TTS service not reachable'),
+            backgroundColor: ok ? BrandColors.success : BrandColors.error,
           ),
         );
       }
@@ -151,12 +144,12 @@ class _TranscriptionServiceSectionState
         Row(
           children: [
             Icon(
-              Icons.record_voice_over,
+              Icons.volume_up,
               color: isDark ? BrandColors.nightTurquoise : BrandColors.turquoise,
             ),
             SizedBox(width: Spacing.sm),
             Text(
-              'Transcription Service',
+              'Read Aloud (Narrate)',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: TypographyTokens.bodyLarge,
@@ -167,8 +160,8 @@ class _TranscriptionServiceSectionState
         ),
         SizedBox(height: Spacing.sm),
         Text(
-          'Connect to a Whisper-compatible transcription API '
-          '(OpenAI, Groq, parachute-scribe, etc.).',
+          'Connect to an OpenAI TTS-compatible endpoint '
+          '(Narrate, OpenAI, etc.) to read notes aloud.',
           style: TextStyle(
             fontSize: TypographyTokens.bodySmall,
             color: isDark ? BrandColors.nightTextSecondary : BrandColors.driftwood,
@@ -180,7 +173,7 @@ class _TranscriptionServiceSectionState
           controller: _urlController,
           decoration: InputDecoration(
             labelText: 'Service URL',
-            hintText: 'https://api.groq.com/openai',
+            hintText: 'http://192.168.1.100:5912',
             border: const OutlineInputBorder(),
             prefixIcon: const Icon(Icons.link),
             suffixIcon: IconButton(

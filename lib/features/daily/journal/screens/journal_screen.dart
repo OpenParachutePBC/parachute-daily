@@ -8,7 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:parachute/core/config/app_config.dart';
 import 'package:parachute/core/theme/design_tokens.dart';
 import 'package:parachute/core/providers/backend_health_provider.dart'
-    show transcriptionApiServiceProvider, transcriptionServiceReachableProvider;
+    show transcriptionApiServiceProvider, transcriptionServiceReachableProvider, ttsApiServiceProvider;
+import 'package:parachute/core/widgets/read_aloud_button.dart' show readAloudFromContext;
 import 'package:parachute/core/providers/app_state_provider.dart' show apiKeyProvider;
 import 'package:parachute/core/providers/feature_flags_provider.dart' show aiServerUrlProvider;
 import 'package:parachute/core/providers/connectivity_provider.dart' show isServerAvailableProvider;
@@ -481,7 +482,11 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     );
   }
 
-  /// Upload audio asset, create entry, enqueue on-device transcription.
+  /// Upload audio, transcribe via Scribe, create note with content + attachment.
+  ///
+  /// Transcription strategy: Scribe (server) first → on-device fallback → empty.
+  /// The note is created with whatever transcript is available so the vault
+  /// stores a fully-formed note. No vault trigger dependency.
   Future<void> _addVoiceEntryLocally(
     String transcript,
     String localAudioPath,
@@ -495,41 +500,80 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     if (!mounted) return;
 
     if (serverPath != null) {
-      // Online: create entry with server audio path
+      // Online path: try Scribe transcription before creating the note.
+      String content = transcript; // on-device streaming transcript (may be empty)
+
+      final transcriptionService = ref.read(transcriptionApiServiceProvider);
+      if (transcriptionService != null) {
+        try {
+          debugPrint('[JournalScreen] Trying Scribe transcription...');
+          final scribeText = await transcriptionService.transcribe(localAudioPath);
+          if (scribeText.isNotEmpty) {
+            content = scribeText;
+            debugPrint('[JournalScreen] Scribe transcript: ${content.length} chars');
+          }
+        } catch (e) {
+          debugPrint('[JournalScreen] Scribe transcription failed: $e');
+          // Fall through to on-device fallback
+        }
+      }
+
+      // Create entry with transcript content
       final entry = await api.createEntry(
-        content: transcript,
+        content: content,
         createdAt: createdAt,
         metadata: {
           'type': 'voice',
           'audio_path': serverPath,
           'duration_seconds': duration,
-          if (transcript.isEmpty) 'transcription_status': 'processing',
+          'source': 'voice',
+          if (content.isEmpty) 'transcription_status': 'processing',
         },
       );
       if (!mounted) return;
 
       if (entry != null) {
+        // Attach audio to the note so vault has a proper attachment record
+        final ext = serverPath.split('.').last.toLowerCase();
+        final mime = switch (ext) {
+          'ogg' || 'opus' => 'audio/ogg',
+          'wav' => 'audio/wav',
+          'mp3' => 'audio/mpeg',
+          'm4a' || 'mp4' => 'audio/mp4',
+          _ => 'audio/ogg',
+        };
+        await api.addAttachment(entry.id, serverPath, mime);
+
         await _appendEntryToCache(
           entry,
-          content: transcript,
+          content: content,
           type: JournalEntryType.voice,
           audioPath: serverPath,
           durationSeconds: duration,
         );
 
-        // Enqueue on-device transcription — it owns the staged file lifecycle.
-        debugPrint('[JournalScreen] Enqueuing on-device transcription for ${entry.id}');
-        ref.read(postHocTranscriptionProvider.notifier).enqueue(
-          entryId: entry.id,
-          audioPath: localAudioPath,
-          durationSeconds: duration,
-        );
+        // If Scribe produced a transcript, we're done. Otherwise fall back
+        // to on-device post-hoc transcription.
+        if (content.isEmpty) {
+          debugPrint('[JournalScreen] No Scribe transcript — enqueuing on-device transcription for ${entry.id}');
+          ref.read(postHocTranscriptionProvider.notifier).enqueue(
+            entryId: entry.id,
+            audioPath: localAudioPath,
+            durationSeconds: duration,
+          );
+        } else {
+          // Transcript obtained — clean up local audio file
+          try {
+            await File(localAudioPath).delete();
+          } catch (e) {
+            debugPrint('[JournalScreen] Failed to delete staged audio: $e');
+          }
+        }
       } else {
-        // Upload succeeded but entry creation failed — queue with server path so audio
-        // is not re-uploaded, then clean up the local staged file.
+        // Upload succeeded but entry creation failed — queue with server path
         await _appendEntryToCache(
           null,
-          content: transcript,
+          content: content,
           type: JournalEntryType.voice,
           audioPath: serverPath,
           durationSeconds: duration,
@@ -1194,6 +1238,15 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
                 onTap: () {
                   Navigator.pop(context);
                   _copyEntryContent(entry);
+                },
+              ),
+            if (entry.content.isNotEmpty && ref.read(ttsApiServiceProvider) != null)
+              ListTile(
+                leading: Icon(Icons.volume_up_outlined, color: BrandColors.turquoise),
+                title: const Text('Read aloud'),
+                onTap: () {
+                  Navigator.pop(context);
+                  readAloudFromContext(context: this.context, ref: ref, text: entry.content, noteId: entry.id);
                 },
               ),
             ListTile(
