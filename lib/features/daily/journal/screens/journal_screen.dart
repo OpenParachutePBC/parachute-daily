@@ -538,6 +538,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     }
 
     // Online: try Scribe for a transcript before creating the note.
+    if (!mounted) return;
     String content = initialTranscript;
     final transcriptionService = ref.read(transcriptionApiServiceProvider);
     if (content.isEmpty && transcriptionService != null) {
