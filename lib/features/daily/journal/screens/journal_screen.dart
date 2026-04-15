@@ -14,7 +14,6 @@ import 'package:parachute/core/providers/app_state_provider.dart' show apiKeyPro
 import 'package:parachute/core/providers/feature_flags_provider.dart' show aiServerUrlProvider;
 import 'package:parachute/core/providers/connectivity_provider.dart' show isServerAvailableProvider;
 import 'package:parachute/core/models/thing.dart';
-import 'package:parachute/core/services/note_local_cache.dart';
 import 'package:parachute/core/services/tag_service.dart' show TagInfo, tagServiceProvider;
 import 'package:parachute/features/vault/providers/vault_providers.dart';
 import '../../recorder/providers/post_hoc_transcription_provider.dart';
@@ -322,56 +321,6 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
 
   // ========== Entry CRUD Operations ==========
 
-  /// Adds an entry to the local cache for immediate display.
-  ///
-  /// If [entry] is null the write failed — fall back to adding a pending entry.
-  Future<void> _appendEntryToCache(JournalEntry? entry, {
-    required String content,
-    JournalEntryType type = JournalEntryType.text,
-    String? audioPath,
-    String? imagePath,
-    int? durationSeconds,
-  }) async {
-    if (entry != null) {
-      final date = ref.read(selectedJournalDateProvider);
-      setState(() {
-        _cachedJournal = (_cachedJournal ?? JournalDay.empty(date)).addEntry(entry);
-        _shouldScrollToBottom = true;
-      });
-      // Write to cache immediately so Phase 1 of the next provider load
-      // includes this entry.
-      final cache = await ref.read(noteLocalCacheProvider.future);
-      final note = Note(
-        id: entry.id,
-        content: entry.content,
-        createdAt: entry.createdAt,
-        tags: entry.tags ?? ['captured'],
-      );
-      cache.putNotes([note]);
-    } else {
-      // Offline — save to cache as pending_create
-      final cache = await ref.read(noteLocalCacheProvider.future);
-      final localId = 'pending-${DateTime.now().millisecondsSinceEpoch}';
-      final tags = <String>['captured'];
-      final pendingNote = Note(id: localId, content: content, createdAt: DateTime.now(), tags: tags);
-      cache.insertPendingCreate(pendingNote, audioPath: audioPath);
-      final pending = JournalEntry(
-        id: localId, content: content, title: '', createdAt: DateTime.now(),
-        type: type, audioPath: audioPath, isPending: true,
-        durationSeconds: durationSeconds,
-      );
-      if (!mounted) return;
-      setState(() {
-        final date = ref.read(selectedJournalDateProvider);
-        _cachedJournal = (_cachedJournal ?? JournalDay.empty(date)).addEntry(pending);
-        _shouldScrollToBottom = true;
-      });
-    }
-    if (!mounted) return;
-    ref.invalidate(selectedJournalProvider);
-    ref.read(journalRefreshTriggerProvider.notifier).state++;
-  }
-
   static String _entryTypeString(JournalEntryType type) {
     switch (type) {
       case JournalEntryType.voice: return 'voice';
@@ -474,126 +423,212 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
 
   Future<void> _addVoiceEntry(String transcript, String localAudioPath, int duration, DateTime createdAt) async {
     debugPrint('[JournalScreen] Adding voice entry (createdAt: $createdAt)...');
-    await _addVoiceEntryLocally(
-      transcript,
-      localAudioPath,
-      duration,
-      createdAt,
+
+    // Non-blocking: write a pending entry to the local cache and UI right away
+    // so the recorder stays available. Upload + transcription run in the
+    // background and upgrade the pending entry into a server entry when done.
+    final localId = 'pending-${DateTime.now().millisecondsSinceEpoch}';
+    await _insertPendingVoiceEntry(
+      localId: localId,
+      content: transcript,
+      localAudioPath: localAudioPath,
+      duration: duration,
+      createdAt: createdAt,
     );
+
+    // Intentionally not awaited — caller (JournalInputBar) can clear its
+    // processing flag as soon as the pending entry is visible.
+    unawaited(_finishVoiceEntryInBackground(
+      localId: localId,
+      initialTranscript: transcript,
+      localAudioPath: localAudioPath,
+      duration: duration,
+      createdAt: createdAt,
+    ));
   }
 
-  /// Upload audio, transcribe via Scribe, create note with content + attachment.
+  /// Insert a pending voice entry into the local cache and UI.
   ///
-  /// Transcription strategy: Scribe (server) first → on-device fallback → empty.
-  /// The note is created with whatever transcript is available so the vault
-  /// stores a fully-formed note. No vault trigger dependency.
-  Future<void> _addVoiceEntryLocally(
-    String transcript,
-    String localAudioPath,
-    int duration,
-    DateTime createdAt,
-  ) async {
+  /// The pending entry carries the local audio path so the entry card can
+  /// show its own "Transcribing..." indicator and play the audio before the
+  /// server round-trip completes.
+  Future<void> _insertPendingVoiceEntry({
+    required String localId,
+    required String content,
+    required String localAudioPath,
+    required int duration,
+    required DateTime createdAt,
+  }) async {
+    final cache = await ref.read(noteLocalCacheProvider.future);
+    final pendingNote = Note(
+      id: localId,
+      content: content,
+      createdAt: createdAt,
+      tags: const ['captured'],
+    );
+    cache.insertPendingCreate(pendingNote, audioPath: localAudioPath);
+
+    if (!mounted) return;
+    final pending = JournalEntry(
+      id: localId,
+      content: content,
+      title: '',
+      createdAt: createdAt,
+      type: JournalEntryType.voice,
+      audioPath: localAudioPath,
+      durationSeconds: duration,
+      isPending: true,
+      isPendingTranscription: content.isEmpty,
+    );
+    setState(() {
+      final date = ref.read(selectedJournalDateProvider);
+      _cachedJournal = (_cachedJournal ?? JournalDay.empty(date)).addEntry(pending);
+      _shouldScrollToBottom = true;
+    });
+    ref.read(journalRefreshTriggerProvider.notifier).state++;
+  }
+
+  /// Upload audio + transcribe + create server note, then swap the pending
+  /// entry for the authoritative server entry in cache and UI.
+  ///
+  /// Transcription strategy: Scribe (server) first → on-device fallback →
+  /// empty (user can tap the Transcribe button to retry later). If upload
+  /// fails the entry stays pending and will flush via the pending-sync queue
+  /// on reconnect.
+  Future<void> _finishVoiceEntryInBackground({
+    required String localId,
+    required String initialTranscript,
+    required String localAudioPath,
+    required int duration,
+    required DateTime createdAt,
+  }) async {
+    try {
+      await _runVoiceEntryUpload(
+        localId: localId,
+        initialTranscript: initialTranscript,
+        localAudioPath: localAudioPath,
+        duration: duration,
+        createdAt: createdAt,
+      );
+    } catch (e, st) {
+      // The caller doesn't await us, so any uncaught throw here disappears.
+      // Log it explicitly; the pending entry stays in the queue and the user
+      // can retry via the card's Transcribe button or pending-sync retry.
+      debugPrint('[JournalScreen] Background voice finish failed: $e\n$st');
+    }
+  }
+
+  Future<void> _runVoiceEntryUpload({
+    required String localId,
+    required String initialTranscript,
+    required String localAudioPath,
+    required int duration,
+    required DateTime createdAt,
+  }) async {
+    if (!mounted) return;
     final api = ref.read(dailyApiServiceProvider);
 
-    // Try to upload audio to server first
     final serverPath = await api.uploadAudio(File(localAudioPath));
+    if (serverPath == null) {
+      // Offline / upload failed: leave the pending entry in the cache so the
+      // pending-sync queue can flush it when the server is reachable again.
+      debugPrint(
+          '[JournalScreen] Voice upload failed — pending entry $localId stays queued');
+      return;
+    }
+
+    // Online: try Scribe for a transcript before creating the note.
     if (!mounted) return;
-
-    if (serverPath != null) {
-      // Online path: try Scribe transcription before creating the note.
-      String content = transcript; // on-device streaming transcript (may be empty)
-
-      final transcriptionService = ref.read(transcriptionApiServiceProvider);
-      if (transcriptionService != null) {
-        try {
-          debugPrint('[JournalScreen] Trying Scribe transcription...');
-          final scribeText = await transcriptionService.transcribe(localAudioPath);
-          if (scribeText.isNotEmpty) {
-            content = scribeText;
-            debugPrint('[JournalScreen] Scribe transcript: ${content.length} chars');
-          }
-        } catch (e) {
-          debugPrint('[JournalScreen] Scribe transcription failed: $e');
-          // Fall through to on-device fallback
+    String content = initialTranscript;
+    final transcriptionService = ref.read(transcriptionApiServiceProvider);
+    if (content.isEmpty && transcriptionService != null) {
+      try {
+        debugPrint('[JournalScreen] Trying Scribe transcription for $localId...');
+        final scribeText = await transcriptionService.transcribe(localAudioPath);
+        if (scribeText.isNotEmpty) {
+          content = scribeText;
+          debugPrint(
+              '[JournalScreen] Scribe transcript: ${content.length} chars');
         }
+      } catch (e) {
+        debugPrint('[JournalScreen] Scribe transcription failed: $e');
+        // Fall through to creating the note with empty content; the on-device
+        // post-hoc transcription provider picks it up next.
       }
+    }
 
-      // Create entry with transcript content
-      final entry = await api.createEntry(
-        content: content,
-        createdAt: createdAt,
-        metadata: {
-          'type': 'voice',
-          'audio_path': serverPath,
-          'duration_seconds': duration,
-          'source': 'voice',
-          if (content.isEmpty) 'transcription_status': 'processing',
-        },
-      );
-      if (!mounted) return;
+    final entry = await api.createEntry(
+      content: content,
+      createdAt: createdAt,
+      metadata: {
+        'type': 'voice',
+        'audio_path': serverPath,
+        'duration_seconds': duration,
+        'source': 'voice',
+        if (content.isEmpty) 'transcription_status': 'processing',
+      },
+    );
 
-      if (entry != null) {
-        // Attach audio to the note so vault has a proper attachment record
-        final ext = serverPath.split('.').last.toLowerCase();
-        final mime = switch (ext) {
-          'ogg' || 'opus' => 'audio/ogg',
-          'wav' => 'audio/wav',
-          'mp3' => 'audio/mpeg',
-          'm4a' || 'mp4' => 'audio/mp4',
-          _ => 'audio/ogg',
-        };
-        await api.addAttachment(entry.id, serverPath, mime);
+    if (entry == null) {
+      // Upload succeeded but note creation failed — leave the pending entry
+      // in place so the pending-sync queue can retry the POST.
+      debugPrint(
+          '[JournalScreen] Note POST failed — pending entry $localId stays queued');
+      return;
+    }
 
-        await _appendEntryToCache(
-          entry,
-          content: content,
-          type: JournalEntryType.voice,
-          audioPath: serverPath,
-          durationSeconds: duration,
-        );
+    // Attach audio to the server note so vault has a proper attachment record.
+    final ext = serverPath.split('.').last.toLowerCase();
+    final mime = switch (ext) {
+      'ogg' || 'opus' => 'audio/ogg',
+      'wav' => 'audio/wav',
+      'mp3' => 'audio/mpeg',
+      'm4a' || 'mp4' => 'audio/mp4',
+      _ => 'audio/ogg',
+    };
+    await api.addAttachment(entry.id, serverPath, mime);
 
-        // If Scribe produced a transcript, we're done. Otherwise fall back
-        // to on-device post-hoc transcription.
-        if (content.isEmpty) {
-          debugPrint('[JournalScreen] No Scribe transcript — enqueuing on-device transcription for ${entry.id}');
-          ref.read(postHocTranscriptionProvider.notifier).enqueue(
-            entryId: entry.id,
-            audioPath: localAudioPath,
-            durationSeconds: duration,
-          );
-        } else {
-          // Transcript obtained — clean up local audio file
-          try {
-            await File(localAudioPath).delete();
-          } catch (e) {
-            debugPrint('[JournalScreen] Failed to delete staged audio: $e');
-          }
-        }
-      } else {
-        // Upload succeeded but entry creation failed — queue with server path
-        await _appendEntryToCache(
-          null,
-          content: content,
-          type: JournalEntryType.voice,
-          audioPath: serverPath,
-          durationSeconds: duration,
-        );
-        try {
-          await File(localAudioPath).delete();
-        } catch (e) {
-          debugPrint('[JournalScreen] Failed to delete staged audio: $e');
-        }
+    // Swap the pending entry for the server entry in cache + UI.
+    if (!mounted) return;
+    final cache = await ref.read(noteLocalCacheProvider.future);
+    cache.removeNote(localId);
+    cache.putNotes([
+      Note(
+        id: entry.id,
+        content: entry.content,
+        createdAt: entry.createdAt,
+        tags: entry.tags ?? const ['captured'],
+      ),
+    ]);
+
+    if (mounted) {
+      setState(() {
+        _cachedJournal = _cachedJournal
+            ?.removeEntry(localId)
+            .addEntry(entry);
+      });
+      ref.invalidate(selectedJournalProvider);
+      ref.read(journalRefreshTriggerProvider.notifier).state++;
+    }
+
+    if (content.isEmpty) {
+      // Scribe returned nothing — fall back to on-device post-hoc transcription.
+      debugPrint(
+          '[JournalScreen] No Scribe transcript — enqueuing on-device transcription for ${entry.id}');
+      if (mounted) {
+        ref.read(postHocTranscriptionProvider.notifier).enqueue(
+              entryId: entry.id,
+              audioPath: localAudioPath,
+              durationSeconds: duration,
+            );
       }
     } else {
-      // Offline: save with staged local path — will upload on reconnect
-      debugPrint('[JournalScreen] Offline — voice entry queued with staged audio');
-      await _appendEntryToCache(
-        null,
-        content: transcript,
-        type: JournalEntryType.voice,
-        audioPath: localAudioPath,
-        durationSeconds: duration,
-      );
+      // Transcript obtained — clean up local audio file.
+      try {
+        await File(localAudioPath).delete();
+      } catch (e) {
+        debugPrint('[JournalScreen] Failed to delete staged audio: $e');
+      }
     }
   }
 

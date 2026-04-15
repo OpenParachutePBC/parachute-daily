@@ -288,7 +288,9 @@ class _JournalInputBarState extends ConsumerState<JournalInputBar>
 
     try {
       // Capture recording start time before stopping (stop resets state)
-      final createdAt = ref.read(dailyRecordingProvider).startedAt ?? DateTime.now();
+      // Fallback must be UTC too — a bare local DateTime would reintroduce
+      // the timezone-shift bug if `startedAt` is ever null.
+      final createdAt = ref.read(dailyRecordingProvider).startedAt ?? DateTime.now().toUtc();
 
       final dailyNotifier = ref.read(dailyRecordingProvider.notifier);
       final audioPath = await dailyNotifier.stopRecording();
