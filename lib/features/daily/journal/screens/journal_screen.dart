@@ -502,6 +502,30 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     required int duration,
     required DateTime createdAt,
   }) async {
+    try {
+      await _runVoiceEntryUpload(
+        localId: localId,
+        initialTranscript: initialTranscript,
+        localAudioPath: localAudioPath,
+        duration: duration,
+        createdAt: createdAt,
+      );
+    } catch (e, st) {
+      // The caller doesn't await us, so any uncaught throw here disappears.
+      // Log it explicitly; the pending entry stays in the queue and the user
+      // can retry via the card's Transcribe button or pending-sync retry.
+      debugPrint('[JournalScreen] Background voice finish failed: $e\n$st');
+    }
+  }
+
+  Future<void> _runVoiceEntryUpload({
+    required String localId,
+    required String initialTranscript,
+    required String localAudioPath,
+    required int duration,
+    required DateTime createdAt,
+  }) async {
+    if (!mounted) return;
     final api = ref.read(dailyApiServiceProvider);
 
     final serverPath = await api.uploadAudio(File(localAudioPath));
@@ -564,6 +588,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> with WidgetsBindi
     await api.addAttachment(entry.id, serverPath, mime);
 
     // Swap the pending entry for the server entry in cache + UI.
+    if (!mounted) return;
     final cache = await ref.read(noteLocalCacheProvider.future);
     cache.removeNote(localId);
     cache.putNotes([
