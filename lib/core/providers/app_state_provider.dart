@@ -51,6 +51,47 @@ class ServerUrlNotifier extends AsyncNotifier<String?> {
     }
   }
 
+  /// Canonicalize a user-entered server URL.
+  ///
+  /// Forgiving normalization for onboarding / settings:
+  /// - Trims whitespace and strips trailing slashes.
+  /// - Prepends `http://` when no scheme is given (Parachute Vaults run over
+  ///   plain http on the local network by default; users who want TLS can
+  ///   type `https://` themselves).
+  /// - Defaults to port 1940 (Parachute Vault's default) when no port is given.
+  ///
+  /// Returns null when the input can't be salvaged into a valid http/https URL.
+  static String? normalizeServerUrl(String input) {
+    var u = input.trim();
+    if (u.isEmpty) return null;
+    u = u.replaceAll(RegExp(r'/+$'), '');
+
+    // Distinguish "explicit scheme" from "bare host" — `foo://bar` means the
+    // user wrote a scheme, `foo:1940` means hostname:port. If they wrote a
+    // scheme, it has to be http or https; otherwise reject.
+    if (u.contains('://')) {
+      if (!u.startsWith('http://') && !u.startsWith('https://')) {
+        return null;
+      }
+    } else {
+      u = 'http://$u';
+    }
+
+    Uri uri;
+    try {
+      uri = Uri.parse(u);
+    } catch (_) {
+      return null;
+    }
+    if (!uri.hasScheme || uri.host.isEmpty) return null;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+    if (!uri.hasPort) {
+      uri = uri.replace(port: 1940);
+    }
+    final normalized = uri.toString().replaceAll(RegExp(r'/+$'), '');
+    return isValidServerUrl(normalized) ? normalized : null;
+  }
+
   Future<void> setServerUrl(String? url) async {
     final prefs = await SharedPreferences.getInstance();
     if (url != null && url.isNotEmpty) {

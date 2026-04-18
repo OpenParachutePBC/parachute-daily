@@ -2,20 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:parachute/core/config/app_config.dart';
 import 'package:parachute/core/providers/app_state_provider.dart';
-import 'package:parachute/core/services/graph_api_service.dart';
 import 'package:parachute/core/theme/design_tokens.dart';
+import 'package:parachute/features/settings/services/oauth_service.dart';
 
 export 'package:parachute/core/providers/app_state_provider.dart' show isDailyOnlyFlavor;
 
 /// Steps in the onboarding flow.
-enum _Step { welcome, server, apiKey, vault, done }
+enum _Step { welcome, connect, done }
 
-/// Onboarding flow: Welcome → Server → API Key → Vault → Done.
+/// First-run setup. Mirrors [ServerSettingsSection] so the OAuth-first
+/// connect flow is available before the user ever reaches Settings.
 ///
-/// Collects the minimum config needed to reach a working Capture screen:
-/// - Server URL (validated via /api/health)
-/// - Optional API key (validated with auth header)
-/// - Vault selection (from GET /vaults)
+/// Welcome → Connect → Done.
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -26,22 +24,22 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   _Step _step = _Step.welcome;
 
-  // Form state
   final _serverUrlController = TextEditingController(text: AppConfig.defaultServerUrl);
+  final _vaultNameController = TextEditingController();
   final _apiKeyController = TextEditingController();
 
-  // Probe results
-  bool _serverReachable = false;
-  List<String> _availableVaults = const [];
-  String? _selectedVault;
-
-  // UI state
-  bool _busy = false;
+  bool _connecting = false;
+  bool _showManualToken = false;
   String? _errorMessage;
+
+  /// Vault we ended up connected to (server-reported or user-typed), shown
+  /// on the success screen.
+  String? _connectedVault;
 
   @override
   void dispose() {
     _serverUrlController.dispose();
+    _vaultNameController.dispose();
     _apiKeyController.dispose();
     super.dispose();
   }
@@ -55,114 +53,130 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     });
   }
 
-  /// Probe the server: healthy? auth required? fetch vaults.
-  Future<void> _testServer() async {
+  /// Read the URL field, normalize it, write the normalized value back to
+  /// the field so the user sees what we actually use. Returns null if the
+  /// input can't be salvaged.
+  String? _readAndNormalizeUrl() {
+    final normalized = ServerUrlNotifier.normalizeServerUrl(_serverUrlController.text);
+    if (normalized == null) {
+      setState(() {
+        _errorMessage = "That doesn't look like a valid server. "
+            'Try something like `parachute:1940` or `https://vault.example.com`.';
+      });
+      return null;
+    }
+    if (_serverUrlController.text != normalized) {
+      _serverUrlController.text = normalized;
+    }
+    return normalized;
+  }
+
+  Future<void> _connectOAuth() async {
     setState(() {
-      _busy = true;
       _errorMessage = null;
+      _connecting = true;
     });
 
-    final url = _serverUrlController.text.trim();
-    if (!ServerUrlNotifier.isValidServerUrl(url)) {
-      setState(() {
-        _busy = false;
-        _errorMessage = 'Please enter a valid http:// or https:// URL';
-      });
+    final url = _readAndNormalizeUrl();
+    if (url == null) {
+      setState(() => _connecting = false);
       return;
     }
+    final requestedVault = _vaultNameController.text.trim();
 
-    // Probe with no auth first to see if auth is required
-    final probe = GraphApiService(baseUrl: url);
-    final healthyNoAuth = await probe.isHealthy();
-
-    if (!mounted) return;
-
-    if (healthyNoAuth) {
-      _serverReachable = true;
-      // Try fetching vaults
-      final vaults = await probe.fetchVaults();
-      if (!mounted) return;
-      _availableVaults = vaults ?? const [];
-      setState(() {
-        _busy = false;
-      });
-      // Save URL now so dependent screens work; move on.
+    // Persist URL + any requested vault name before launching the browser,
+    // so dependent providers see them and so a mid-flow quit still leaves
+    // the app in a reasonable state.
+    try {
       await ref.read(serverUrlProvider.notifier).setServerUrl(url);
-      _goTo(_Step.apiKey); // User can skip if no auth needed
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _connecting = false;
+        _errorMessage = 'Invalid server URL: $e';
+      });
       return;
     }
+    if (requestedVault.isNotEmpty) {
+      await ref.read(vaultNameProvider.notifier).setVaultName(requestedVault);
+    }
 
-    // Might need auth — assume so and let user enter key
-    _serverReachable = false;
-    setState(() {
-      _busy = false;
-      _errorMessage =
-          'Could not reach server. Check the URL, or continue to enter an API key.';
-    });
+    final oauth = OAuthService();
+    try {
+      final result = await oauth.connect(
+        serverUrl: url,
+        vaultName: requestedVault.isEmpty ? null : requestedVault,
+      );
+      await ref.read(apiKeyProvider.notifier).setApiKey(result.token);
+      // Prefer server-reported vault so later routing matches the token.
+      final finalVault = result.vaultName ?? (requestedVault.isEmpty ? null : requestedVault);
+      await ref.read(vaultNameProvider.notifier).setVaultName(finalVault);
+
+      if (!mounted) return;
+      setState(() {
+        _connecting = false;
+        _connectedVault = finalVault;
+      });
+      _goTo(_Step.done);
+    } on OAuthException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _connecting = false;
+        _errorMessage = 'Connection failed: ${e.message}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _connecting = false;
+        _errorMessage = 'Connection failed: $e';
+      });
+    } finally {
+      oauth.dispose();
+    }
   }
 
-  /// Test API key by making an authenticated health check.
-  Future<void> _testApiKeyAndFetchVaults() async {
+  Future<void> _saveManualToken() async {
     setState(() {
-      _busy = true;
       _errorMessage = null;
+      _connecting = true;
     });
 
-    final url = _serverUrlController.text.trim();
+    final url = _readAndNormalizeUrl();
+    if (url == null) {
+      setState(() => _connecting = false);
+      return;
+    }
     final key = _apiKeyController.text.trim();
-
-    final probe = GraphApiService(
-      baseUrl: url,
-      apiKey: key.isEmpty ? null : key,
-    );
-    final healthy = await probe.isHealthy();
-    if (!mounted) return;
-    if (!healthy) {
+    if (key.isEmpty) {
       setState(() {
-        _busy = false;
-        _errorMessage = 'Server still unreachable with that key. Check both.';
+        _connecting = false;
+        _errorMessage = 'Paste a bearer token, or use Connect to Vault.';
       });
       return;
     }
 
-    final vaults = await probe.fetchVaults();
-    if (!mounted) return;
-
-    _availableVaults = vaults ?? const [];
-    _serverReachable = true;
-    await ref.read(serverUrlProvider.notifier).setServerUrl(url);
-    if (key.isNotEmpty) {
-      await ref.read(apiKeyProvider.notifier).setApiKey(key);
-    }
-    if (!mounted) return;
-    setState(() => _busy = false);
-    _advanceAfterAuth();
-  }
-
-  /// Skip the API key step (use unauthenticated access).
-  void _skipApiKey() {
-    _advanceAfterAuth();
-  }
-
-  void _advanceAfterAuth() {
-    // Auto-select if only one (or zero) vaults, then skip the picker.
-    if (_availableVaults.length <= 1) {
-      _selectedVault = _availableVaults.isNotEmpty ? _availableVaults.first : null;
-      _saveVaultAndFinish();
+    try {
+      await ref.read(serverUrlProvider.notifier).setServerUrl(url);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _connecting = false;
+        _errorMessage = 'Invalid server URL: $e';
+      });
       return;
     }
-    _selectedVault = _availableVaults.first;
-    _goTo(_Step.vault);
-  }
+    final vaultName = _vaultNameController.text.trim();
+    await ref
+        .read(vaultNameProvider.notifier)
+        .setVaultName(vaultName.isEmpty ? null : vaultName);
+    await ref.read(apiKeyProvider.notifier).setApiKey(key);
 
-  Future<void> _saveVaultAndFinish() async {
-    setState(() => _busy = true);
-    if (_selectedVault != null && _selectedVault!.isNotEmpty) {
-      await ref.read(vaultNameProvider.notifier).setVaultName(_selectedVault);
-    }
     if (!mounted) return;
+    setState(() {
+      _connecting = false;
+      _connectedVault = vaultName.isEmpty ? null : vaultName;
+    });
     _goTo(_Step.done);
-    setState(() => _busy = false);
   }
 
   Future<void> _completeOnboarding() async {
@@ -171,13 +185,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     Navigator.of(context).pushReplacementNamed('/');
   }
 
-  /// Allow the user to continue without a working server (they can fix it
-  /// in Settings later). Marks onboarding complete with whatever we have.
-  Future<void> _continueAnyway() async {
-    final url = _serverUrlController.text.trim();
-    if (ServerUrlNotifier.isValidServerUrl(url)) {
-      await ref.read(serverUrlProvider.notifier).setServerUrl(url);
-    }
+  /// Finish onboarding without connecting — offline mode. User can complete
+  /// setup later in Settings.
+  Future<void> _continueOffline() async {
     await _completeOnboarding();
   }
 
@@ -195,9 +205,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           padding: EdgeInsets.all(Spacing.xl),
           child: switch (_step) {
             _Step.welcome => _buildWelcome(isDark),
-            _Step.server => _buildServer(isDark),
-            _Step.apiKey => _buildApiKey(isDark),
-            _Step.vault => _buildVault(isDark),
+            _Step.connect => _buildConnect(isDark),
             _Step.done => _buildDone(isDark),
           },
         ),
@@ -222,160 +230,196 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         SizedBox(height: Spacing.md),
         _subtitle('Your personal graph.\nJournal in, AI plugs in.', isDark),
         const Spacer(),
-        _primaryButton('Get Started', isDark, () => _goTo(_Step.server)),
+        _primaryButton('Get Started', isDark, () => _goTo(_Step.connect)),
         SizedBox(height: Spacing.xl),
       ],
     );
   }
 
-  Widget _buildServer(bool isDark) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Spacer(),
-        _stepHeader('Connect to your vault', isDark),
-        SizedBox(height: Spacing.md),
-        _subtitle(
-          'Parachute Daily syncs with a Parachute Vault. '
-          'Enter the URL where your vault is running.',
-          isDark,
+  Widget _buildConnect(bool isDark) {
+    return SingleChildScrollView(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: MediaQuery.of(context).size.height - Spacing.xl * 2,
         ),
-        SizedBox(height: Spacing.xl),
-        TextField(
-          controller: _serverUrlController,
-          enabled: !_busy,
-          autocorrect: false,
-          keyboardType: TextInputType.url,
-          style: TextStyle(
-            color: isDark ? BrandColors.nightText : BrandColors.charcoal,
-          ),
-          decoration: InputDecoration(
-            labelText: 'Server URL',
-            hintText: 'http://localhost:1940',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(Radii.md),
-            ),
-            filled: true,
-            fillColor: isDark ? BrandColors.nightSurfaceElevated : BrandColors.softWhite,
-          ),
-        ),
-        if (_errorMessage != null) ...[
-          SizedBox(height: Spacing.md),
-          _errorText(_errorMessage!),
-        ],
-        const Spacer(),
-        _primaryButton(
-          _busy ? 'Testing…' : 'Test Connection',
-          isDark,
-          _busy ? null : _testServer,
-        ),
-        SizedBox(height: Spacing.sm),
-        _secondaryButton('Back', isDark, _busy ? null : () => _goTo(_Step.welcome)),
-        SizedBox(height: Spacing.xl),
-      ],
-    );
-  }
+        child: IntrinsicHeight(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(height: Spacing.xl),
+              _stepHeader('Connect to your vault', isDark),
+              SizedBox(height: Spacing.md),
+              _subtitle(
+                "Parachute Daily syncs with a Parachute Vault. Enter your vault's "
+                "URL — we'll open your browser to authorize.",
+                isDark,
+              ),
+              SizedBox(height: Spacing.xl),
 
-  Widget _buildApiKey(bool isDark) {
-    final skipLabel = _serverReachable ? 'Skip (no key needed)' : 'Skip';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Spacer(),
-        _stepHeader(
-          _serverReachable ? 'Optional: API key' : 'Enter API key',
-          isDark,
-        ),
-        SizedBox(height: Spacing.md),
-        _subtitle(
-          _serverReachable
-              ? 'Your server is reachable without authentication. '
-                  'If you want to secure it later, add a key here.'
-              : 'The server may require authentication. '
-                  'Paste your API key to continue.',
-          isDark,
-        ),
-        SizedBox(height: Spacing.xl),
-        TextField(
-          controller: _apiKeyController,
-          enabled: !_busy,
-          autocorrect: false,
-          obscureText: true,
-          style: TextStyle(
-            color: isDark ? BrandColors.nightText : BrandColors.charcoal,
-          ),
-          decoration: InputDecoration(
-            labelText: 'API Key',
-            hintText: 'para_…',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(Radii.md),
-            ),
-            filled: true,
-            fillColor: isDark ? BrandColors.nightSurfaceElevated : BrandColors.softWhite,
-          ),
-        ),
-        if (_errorMessage != null) ...[
-          SizedBox(height: Spacing.md),
-          _errorText(_errorMessage!),
-        ],
-        const Spacer(),
-        _primaryButton(
-          _busy ? 'Testing…' : 'Test & Continue',
-          isDark,
-          _busy ? null : _testApiKeyAndFetchVaults,
-        ),
-        SizedBox(height: Spacing.sm),
-        _secondaryButton(skipLabel, isDark, _busy ? null : _skipApiKey),
-        SizedBox(height: Spacing.xl),
-      ],
-    );
-  }
+              // Server URL
+              TextField(
+                controller: _serverUrlController,
+                enabled: !_connecting,
+                autocorrect: false,
+                keyboardType: TextInputType.url,
+                style: TextStyle(
+                  color: isDark ? BrandColors.nightText : BrandColors.charcoal,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Server URL',
+                  hintText: 'parachute:1940 or https://vault.example.com',
+                  prefixIcon: const Icon(Icons.link),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(Radii.md),
+                  ),
+                  filled: true,
+                  fillColor: isDark
+                      ? BrandColors.nightSurfaceElevated
+                      : BrandColors.softWhite,
+                ),
+              ),
+              SizedBox(height: Spacing.md),
 
-  Widget _buildVault(bool isDark) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Spacer(),
-        _stepHeader('Choose a vault', isDark),
-        SizedBox(height: Spacing.md),
-        _subtitle(
-          'Your server has multiple vaults. Pick one to start with — '
-          'you can change this anytime in Settings.',
-          isDark,
-        ),
-        SizedBox(height: Spacing.xl),
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: Spacing.md),
-          decoration: BoxDecoration(
-            color: isDark ? BrandColors.nightSurfaceElevated : BrandColors.softWhite,
-            borderRadius: BorderRadius.circular(Radii.md),
-            border: Border.all(color: BrandColors.stone),
+              // Vault name (optional)
+              TextField(
+                controller: _vaultNameController,
+                enabled: !_connecting,
+                autocorrect: false,
+                style: TextStyle(
+                  color: isDark ? BrandColors.nightText : BrandColors.charcoal,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Vault name (optional)',
+                  hintText: 'Leave blank for default',
+                  prefixIcon: const Icon(Icons.inventory_2_outlined),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(Radii.md),
+                  ),
+                  filled: true,
+                  fillColor: isDark
+                      ? BrandColors.nightSurfaceElevated
+                      : BrandColors.softWhite,
+                ),
+              ),
+
+              if (_errorMessage != null) ...[
+                SizedBox(height: Spacing.md),
+                _errorText(_errorMessage!),
+              ],
+
+              SizedBox(height: Spacing.lg),
+
+              // Primary: Connect to Vault (OAuth)
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _connecting ? null : _connectOAuth,
+                  icon: _connecting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.lock_open, size: 18),
+                  label: Text(_connecting ? 'Connecting…' : 'Connect to Vault'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor:
+                        isDark ? BrandColors.nightForest : BrandColors.forest,
+                    padding: EdgeInsets.symmetric(vertical: Spacing.md),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(Radii.md),
+                    ),
+                  ),
+                ),
+              ),
+
+              SizedBox(height: Spacing.sm),
+
+              // Advanced: paste a bearer token
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _connecting
+                      ? null
+                      : () => setState(() {
+                            _showManualToken = !_showManualToken;
+                            _errorMessage = null;
+                          }),
+                  child: Text(
+                    _showManualToken
+                        ? 'Hide advanced'
+                        : 'Advanced: paste a bearer token',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              ),
+
+              if (_showManualToken) ...[
+                SizedBox(height: Spacing.xs),
+                TextField(
+                  controller: _apiKeyController,
+                  enabled: !_connecting,
+                  obscureText: true,
+                  autocorrect: false,
+                  style: TextStyle(
+                    color: isDark ? BrandColors.nightText : BrandColors.charcoal,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'API Key',
+                    hintText: 'pvt_… or para_…',
+                    prefixIcon: const Icon(Icons.key),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(Radii.md),
+                    ),
+                    filled: true,
+                    fillColor: isDark
+                        ? BrandColors.nightSurfaceElevated
+                        : BrandColors.softWhite,
+                  ),
+                ),
+                SizedBox(height: Spacing.sm),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: _connecting ? null : _saveManualToken,
+                    child: const Text('Save token and continue'),
+                  ),
+                ),
+              ],
+
+              const Spacer(),
+
+              _secondaryButton(
+                'Back',
+                isDark,
+                _connecting ? null : () => _goTo(_Step.welcome),
+              ),
+              TextButton(
+                onPressed: _connecting ? null : _continueOffline,
+                child: Text(
+                  'Skip — use offline',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isDark
+                        ? BrandColors.nightTextSecondary
+                        : BrandColors.driftwood,
+                  ),
+                ),
+              ),
+              SizedBox(height: Spacing.md),
+            ],
           ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: _selectedVault,
-              isExpanded: true,
-              items: _availableVaults
-                  .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                  .toList(),
-              onChanged: _busy
-                  ? null
-                  : (v) => setState(() => _selectedVault = v),
-            ),
-          ),
         ),
-        const Spacer(),
-        _primaryButton(
-          _busy ? 'Saving…' : 'Continue',
-          isDark,
-          _busy ? null : _saveVaultAndFinish,
-        ),
-        SizedBox(height: Spacing.xl),
-      ],
+      ),
     );
   }
 
   Widget _buildDone(bool isDark) {
+    final vault = _connectedVault;
+    final subtitle = vault == null || vault.isEmpty
+        ? 'Connected. Time to capture something.'
+        : 'Connected to vault "$vault". Time to capture something.';
+
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -388,18 +432,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         SizedBox(height: Spacing.xl),
         _title("You're ready", isDark),
         SizedBox(height: Spacing.md),
-        _subtitle(
-          _serverReachable
-              ? 'Connected to your vault. Time to capture something.'
-              : 'Setup saved. You can fix the server connection in Settings.',
-          isDark,
-        ),
+        _subtitle(subtitle, isDark),
         const Spacer(),
         _primaryButton('Start Capturing', isDark, _completeOnboarding),
-        if (!_serverReachable) ...[
-          SizedBox(height: Spacing.sm),
-          _secondaryButton('Continue anyway', isDark, _continueAnyway),
-        ],
         SizedBox(height: Spacing.xl),
       ],
     );

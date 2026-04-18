@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:parachute/core/config/app_config.dart';
 import 'package:parachute/core/theme/design_tokens.dart';
 import 'package:parachute/core/providers/app_state_provider.dart'
-    show serverUrlProvider, apiKeyProvider, vaultNameProvider;
+    show ServerUrlNotifier, serverUrlProvider, apiKeyProvider, vaultNameProvider;
 import 'package:parachute/core/providers/feature_flags_provider.dart';
 import 'package:parachute/core/services/backend_health_service.dart';
 import 'package:parachute/core/services/graph_api_service.dart';
@@ -91,21 +91,43 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
   }
 
   Future<void> _saveServerUrl() async {
-    final url = _serverUrlController.text.trim();
+    final raw = _serverUrlController.text.trim();
     final featureFlags = ref.read(featureFlagsServiceProvider);
 
+    // Normalize bare hostnames / hostname:port entries so that entering
+    // `parachute:1940` or `vault.local` just works — same forgiveness as
+    // onboarding.
+    String? url;
+    if (raw.isNotEmpty) {
+      url = ServerUrlNotifier.normalizeServerUrl(raw);
+      if (url == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text(
+                "That doesn't look like a valid server URL.",
+              ),
+              backgroundColor: BrandColors.error,
+            ),
+          );
+        }
+        return;
+      }
+      if (url != _serverUrlController.text) {
+        _serverUrlController.text = url;
+      }
+    }
+
     try {
-      await featureFlags.setAiServerUrl(
-          url.isEmpty ? AppConfig.defaultServerUrl : url);
+      await featureFlags.setAiServerUrl(url ?? AppConfig.defaultServerUrl);
       featureFlags.clearCache();
       ref.invalidate(aiServerUrlProvider);
-      await ref.read(serverUrlProvider.notifier).setServerUrl(
-          url.isEmpty ? null : url);
+      await ref.read(serverUrlProvider.notifier).setServerUrl(url);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(url.isEmpty
+            content: Text(url == null
                 ? 'Server URL cleared - offline mode'
                 : 'Server URL saved'),
             backgroundColor: BrandColors.success,
@@ -114,7 +136,7 @@ class _ServerSettingsSectionState extends ConsumerState<ServerSettingsSection> {
       }
 
       // Refresh vault list with new URL
-      if (url.isNotEmpty) _fetchVaults(url);
+      if (url != null) _fetchVaults(url);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
